@@ -1,0 +1,124 @@
+/*
+ * Style riêng cho website khách hàng. Chỉ được nạp bởi CustomerLayout nên không ảnh hưởng Admin.
+ * Mọi class có tiền tố "c-" để không trùng với .btn / .card / .input của Admin.
+ * (Không dùng @layer vì file này nằm ngoài index.css; dùng @apply với utility thuần.)
+ */
+
+.c-container {
+  @apply mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8;
+}
+.c-section {
+  @apply py-16 sm:py-20 lg:py-24;
+}
+.c-card {
+  @apply rounded-2xl border border-slate-100 bg-white shadow-soft;
+}
+
+/* ---------- Nút ---------- */
+.c-btn-primary,
+.c-btn-outline,
+.c-btn-ghost,
+.c-btn-light,
+.c-btn-glass {
+  @apply inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl px-5 py-2.5 text-sm font-semibold transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50;
+}
+.c-btn-primary {
+  @apply bg-accent text-white shadow-soft hover:bg-accent-hover hover:shadow-lift active:scale-[0.98];
+}
+.c-btn-outline {
+  @apply border border-slate-300 bg-white text-brand hover:border-accent hover:bg-accent-soft hover:text-accent;
+}
+.c-btn-ghost {
+  @apply text-brand hover:bg-accent-soft hover:text-accent;
+}
+/* Nút trên nền tối (hero, footer) */
+.c-btn-light {
+  @apply bg-white text-brand hover:bg-accent-soft;
+}
+.c-btn-glass {
+  @apply border border-white/40 bg-white/10 text-white backdrop-blur hover:bg-white/20;
+}
+.c-btn-lg {
+  @apply px-7 py-3.5 text-base;
+}
+.c-btn-sm {
+  @apply px-3.5 py-2 text-[13px];
+}
+
+/* ---------- Form ---------- */
+.c-input {
+  @apply w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-ink transition placeholder:text-slate-400 focus:border-accent focus:outline-none focus:ring-4 focus:ring-accent/10 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500;
+}
+.c-input-error {
+  @apply border-red-300 focus:border-red-400 focus:ring-red-100;
+}
+
+/* ---------- Hình khối & hiệu ứng ---------- */
+/* Khung cửa vòm: dấu hiệu nhận diện xuyên suốt website (hero, thẻ phòng, ảnh giới thiệu). */
+.c-arch {
+  border-radius: 14rem 14rem 1.25rem 1.25rem;
+}
+.c-zoom {
+  transition: transform 0.7s ease-out;
+}
+.group:hover .c-zoom {
+  transform: scale(1.05);
+}
+
+@keyframes c-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.c-fade-in {
+  animation: c-fade-in 0.18s ease-out;
+}
+
+/* Hiệu ứng mở đầu của hero: một chuỗi duy nhất khi tải trang. */
+@keyframes c-rise {
+  from { opacity: 0; transform: translateY(28px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes c-arch-open {
+  from { clip-path: inset(100% 0 0 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+@keyframes c-sun-rise {
+  from { transform: translateY(90px); }
+  to { transform: none; }
+}
+.hero-line {
+  display: block;
+  opacity: 0;
+  animation: c-rise 0.85s cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+}
+.hero-line:nth-child(2) { animation-delay: 0.14s; }
+.hero-line:nth-child(3) { animation-delay: 0.28s; }
+.hero-fade {
+  opacity: 0;
+  animation: c-rise 0.9s ease-out 0.55s forwards;
+}
+.hero-arch {
+  animation: c-arch-open 1.2s cubic-bezier(0.65, 0, 0.2, 1) 0.1s both;
+}
+.hero-sun {
+  transform-box: fill-box;
+  animation: c-sun-rise 2s cubic-bezier(0.2, 0.7, 0.2, 1) 0.4s both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .customer-site *,
+  .customer-site *::before,
+  .customer-site *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .hero-line,
+  .hero-fade {
+    opacity: 1;
+  }
+  .group:hover .c-zoom {
+    transform: none;
+  }
+}
