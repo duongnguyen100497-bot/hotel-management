@@ -75,9 +75,9 @@ Thiết lập khung dự án Go modular monolith và toàn bộ dịch vụ hạ
 
 ---
 
-### T0.3 — HTTP Router (`chi`), chuẩn Error Envelope, Middleware nền, OpenAPI 3.1 khung và kiểm tra ranh giới module
+### T0.3 — HTTP Router (Gin), chuẩn Error Envelope, Middleware nền, OpenAPI 3.1 khung và kiểm tra ranh giới module
 
-- **Commit gợi ý:** `feat(http): add chi router, error envelope, base middlewares, openapi skeleton and boundary lint`
+- **Commit gợi ý:** `feat(http): add gin router, error envelope, base middlewares, openapi skeleton and boundary lint`
 - **Depends on:** `T0.2`
 - **Modules / Files:** `internal/platform/http/`, `BackEnd/api/openapi.yaml`, `internal/arch_test.go`
 
@@ -86,13 +86,14 @@ Thống nhất giao tiếp REST toàn hệ thống (error envelope, phân trang 
 
 #### Phạm vi thực hiện
 - `internal/platform/http`:
-  - Khởi tạo `chi.NewRouter()` gắn base prefix `/api/v1`.
+  - Khởi tạo `gin.New()` (không dùng `gin.Default()`; middleware tự gắn) và route group `/api/v1` (`*gin.RouterGroup`). Middleware là `gin.HandlerFunc`, handler nhận `*gin.Context`.
   - Middleware: `RequestID` / `CorrelationID` (propagated trong `context.Context` và header `X-Request-Id`), `PanicRecovery` (log stack + trả `500`), `StructuredRequestLogger`, `CORS` (exact allowlist từ config), `BodyLimit` (ví dụ 1 MiB mặc định), `RateLimit` in-memory/Redis interface cơ bản (dùng cho login/reset/hold/webhook sau này).
   - Error encoder chuẩn `{ "error": { "code": "...", "message": "...", "fields": [...], "requestId": "..." } }` ánh xạ domain error sang HTTP status: `422` (`validation_failed`), `401` (`unauthenticated`), `403` (`forbidden`), `404` (`not_found`), `409` (`conflict` / `version_conflict`), `429` (`rate_limited`), `503` (`service_unavailable`), `500` (`internal_error`).
   - Helper JSON decode (`DisallowUnknownFields` cho write DTO), cursor pagination envelope `{ "data": [...], "page": { "limit": ..., "cursor": ..., "nextCursor": ... } }`, helper đọc `Idempotency-Key` và `If-Match`.
 - `BackEnd/api/openapi.yaml`: Khởi tạo khung OpenAPI 3.1 với `info`, `servers`, `components.securitySchemes` (Bearer JWT), `components.schemas.ErrorResponse`, `PageInfo`, và đường dẫn `/healthz`, `/readyz`.
 - `internal/arch_test.go`: Viết Go test dùng `go/packages` (hoặc `go list`) kiểm tra luật phụ thuộc:
-  - `domain` không được import `net/http`, `chi`, `pgx`, hay `persistence`.
+  - `domain` không được import `net/http`, `gin`, `pgx`, hay `persistence`.
+  - Không package nào được import `github.com/go-chi/chi` (dự án thống nhất dùng Gin).
   - Module A không được import `internal/modules/<B>/persistence` hoặc `domain` nội bộ của module B (chỉ được import `application` đã export).
   - `delivery/http` không được import `persistence`.
 

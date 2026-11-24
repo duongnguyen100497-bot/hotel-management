@@ -48,7 +48,7 @@ Allowed dependencies are delivery → application/domain; application → its do
 
 ### Platform choices
 
-Use `net/http` + `chi`, `pgx/v5`/`pgxpool`, SQLC for explicit typed SQL, `golang-migrate` SQL migration files, `log/slog` JSON logs, Testcontainers PostgreSQL/Redis/MinIO in integration tests, OpenAPI 3.1 as the REST contract, and an in-process worker/scheduler. This is deliberately sufficient for one graduation-project deployable; no message broker, Kubernetes, or microservice is required.
+Use `net/http` + Gin (`github.com/gin-gonic/gin`), `pgx/v5`/`pgxpool`, SQLC for explicit typed SQL, `golang-migrate` SQL migration files, `log/slog` JSON logs, Testcontainers PostgreSQL/Redis/MinIO in integration tests, OpenAPI 3.1 as the REST contract, and an in-process worker/scheduler. This is deliberately sufficient for one graduation-project deployable; no message broker, Kubernetes, or microservice is required.
 
 Configuration is typed environment configuration: `DATABASE_URL`, `REDIS_URL`, `MINIO_ENDPOINT/ACCESS_KEY/SECRET_KEY/BUCKET`, `SEPAY_WEBHOOK_SECRET` and account identifiers, SMTP host/port/user/password/from, JWT/session secrets, public base URL, hotel timezone, upload limits, and worker schedules. Startup fails if production-required secrets are absent. `/healthz` checks process liveliness; `/readyz` checks PostgreSQL and required adapters according to enabled features. Graceful shutdown stops HTTP intake, workers, then pools.
 

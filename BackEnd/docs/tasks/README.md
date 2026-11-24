@@ -92,7 +92,7 @@ flowchart LR
 | :---: | :---: | --- | --- | :---: | --- |
 | [x] | **T0.1** | Khởi tạo Go module, cấu trúc thư mục & Docker Compose local | — | — | `chore(foundation): initialize go module, package layout and local docker stack` |
 | [x] | **T0.2** | Typed env config, `slog` logging, `/healthz`, `/readyz` & graceful shutdown | `T0.1` | — | `feat(platform): add typed config, slog logger, health probes and graceful shutdown` |
-| [x] | **T0.3** | `chi` router, error envelope, base middleware, OpenAPI 3.1 khung & boundary lint | `T0.2` | — | `feat(http): add chi router, error envelope, base middlewares, openapi skeleton and boundary lint` |
+| [x] | **T0.3** | `gin` router, error envelope, base middleware, OpenAPI 3.1 khung & boundary lint | `T0.2` | — | `feat(http): add gin router, error envelope, base middlewares, openapi skeleton and boundary lint` |
 | [x] | **T0.4** | `pgxpool`, shared PostgreSQL `TxRunner`, Testcontainers helper & Extensions | `T0.2` | `000001` | `feat(db): add pgxpool, shared transaction runner and base extensions migration` |
 | [x] | **T0.5** | Audit append-only & Transactional Outbox primitives + worker skeleton | `T0.3`, `T0.4` | `000002` | `feat(audit): add append-only audit events, transactional outbox and worker skeleton` |
 

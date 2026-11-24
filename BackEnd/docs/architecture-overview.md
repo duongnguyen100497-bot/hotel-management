@@ -85,7 +85,7 @@ Normal PostgreSQL transactions are sufficient for these workflows. Outbox publis
 
 | Concern | Recommendation | Required? | Reason / alternative |
 |---|---|---:|---|
-| HTTP | `net/http` + `chi` | Yes | Idiomatic middleware/routing; stdlib-only is acceptable if route ergonomics preferred. |
+| HTTP | `net/http` + Gin (`github.com/gin-gonic/gin`) | Yes | Route groups (`*gin.RouterGroup`), middleware chain (`gin.HandlerFunc`), handlers take `*gin.Context`. Do not add `chi` (blocked by `internal/arch_test.go`). |
 | PostgreSQL | `pgx/v5` + `pgxpool` | Yes | Native PostgreSQL support/pooling. `database/sql` is a viable abstraction but less direct. |
 | Queries | SQLC-generated typed query layer plus hand-written repository interfaces | Yes | Explicit SQL and compile-time DTOs; ORM would obscure exclusion constraints/reporting SQL. |
 | Migrations | `golang-migrate/migrate` SQL files | Yes | Clear production workflow; Atlas is a viable alternative, choose one only. |

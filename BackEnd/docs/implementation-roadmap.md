@@ -6,7 +6,7 @@ Resolve property tenancy, legal/tax/retention, pricing/cancellation policy, paym
 
 | Phase | Objective, ordered work | Dependencies / acceptance |
 |---|---|---|
-| 0 — contract foundation | Confirm open questions; establish Go module, configuration/secrets, `chi`/pgx/SQLC/migrate conventions, OpenAPI/error envelope, logging/health/readiness, CI/Testcontainers. | No business UI rewrites. Empty service starts/shuts down cleanly; migrations validated; architecture dependency checks documented. |
+| 0 — contract foundation | Confirm open questions; establish Go module, configuration/secrets, Gin/pgx/SQLC/migrate conventions, OpenAPI/error envelope, logging/health/readiness, CI/Testcontainers. | No business UI rewrites. Empty service starts/shuts down cleanly; migrations validated; architecture dependency checks documented. |
 | 1 — identity and audit | Migrations 1–4; identity, sessions, password flow, RBAC seed/bootstrap, authorization middleware, audit/outbox primitives; staff/customer separation. | Requires role mapping approval. Authentication/RBAC negative suite and recovery-admin test pass. |
 | 2 — people/property | Migrations 5–8; customers/employees, hotel settings/media, room types/rooms/amenities, policy publication; staff CRUD APIs and public catalogue. | Requires storage decision/property seed. PII masking/encryption and media validation proven. |
 | 3 — reservations | Migration 9; quote, availability, online multi-room group creation/idempotency, staff reservations, confirmation/cancellation/history/ownership. | Needs property/policy. Parallel booking test proves zero overlap; price snapshots immutable. |
