@@ -1,0 +1,145 @@
+openapi: 3.1.0
+info:
+  title: Hotel Management Backend API
+  version: 0.1.0
+  description: Single-hotel management system REST API (modular monolith).
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+
+paths:
+  /healthz:
+    get:
+      summary: Liveness probe
+      operationId: getHealthz
+      tags:
+        - System
+      responses:
+        "200":
+          description: Process is alive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /readyz:
+    get:
+      summary: Readiness probe
+      operationId: getReadyz
+      tags:
+        - System
+      responses:
+        "200":
+          description: All backing dependencies are ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyResponse"
+        "503":
+          description: One or more dependencies are unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyResponse"
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    ErrorField:
+      type: object
+      required:
+        - field
+        - message
+      properties:
+        field:
+          type: string
+        message:
+          type: string
+
+    ErrorDetail:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          examples:
+            - validation_failed
+            - unauthenticated
+            - forbidden
+            - not_found
+            - method_not_allowed
+            - conflict
+            - version_conflict
+            - rate_limited
+            - service_unavailable
+            - internal_error
+        message:
+          type: string
+        fields:
+          type: array
+          items:
+            $ref: "#/components/schemas/ErrorField"
+        requestId:
+          type: string
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          $ref: "#/components/schemas/ErrorDetail"
+
+    PageInfo:
+      type: object
+      required:
+        - limit
+      properties:
+        limit:
+          type: integer
+          minimum: 1
+        cursor:
+          type: string
+          nullable: true
+        nextCursor:
+          type: string
+          nullable: true
+
+    HealthResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          const: ok
+
+    ReadyResponse:
+      type: object
+      required:
+        - status
+        - checks
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+            - unavailable
+        checks:
+          type: object
+          additionalProperties:
+            type: string
+            enum:
+              - ok
+              - unavailable
+        failed:
+          type: array
+          items:
+            type: string
