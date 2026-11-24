@@ -1,0 +1,13 @@
+# Environment
+.env
+.env.local
+
+# Binaries & build artifacts
+bin/
+*.exe
+*.test
+*.out
+coverage.html
+
+# OS / IDE
+.DS_Store
