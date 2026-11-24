@@ -60,13 +60,17 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		})
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", platformhttp.HealthzHandler())
-	mux.HandleFunc("GET /readyz", platformhttp.ReadyzHandler(3*time.Second, deps...))
+	router := platformhttp.NewRouter(platformhttp.RouterConfig{
+		Logger:             logger,
+		CORSAllowedOrigins: cfg.CORSAllowedOrigins,
+		BodyLimitBytes:     platformhttp.DefaultBodyLimitBytes,
+		ReadyzTimeout:      3 * time.Second,
+		ReadyzChecks:       deps,
+	}, nil)
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           mux,
+		Handler:           router,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
