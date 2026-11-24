@@ -9,14 +9,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	platformhttp "github.com/trandinh0506/hotel-management/backend/internal/platform/http"
 )
 
 func TestHealthzHandler(t *testing.T) {
+	r := platformhttp.NewRouter(platformhttp.RouterConfig{}, nil)
+
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
-
-	platformhttp.HealthzHandler().ServeHTTP(rec, req)
+	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -31,14 +33,16 @@ func TestHealthzHandler(t *testing.T) {
 }
 
 func TestReadyzHandler_AllHealthy(t *testing.T) {
-	handler := platformhttp.ReadyzHandler(2*time.Second,
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/readyz", platformhttp.ReadyzHandler(2*time.Second,
 		platformhttp.DependencyCheck{Name: "postgres", Check: func(context.Context) error { return nil }},
 		platformhttp.DependencyCheck{Name: "redis", Check: func(context.Context) error { return nil }},
-	)
+	))
 
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
@@ -46,14 +50,16 @@ func TestReadyzHandler_AllHealthy(t *testing.T) {
 }
 
 func TestReadyzHandler_DependencyFailureReturns503(t *testing.T) {
-	handler := platformhttp.ReadyzHandler(2*time.Second,
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/readyz", platformhttp.ReadyzHandler(2*time.Second,
 		platformhttp.DependencyCheck{Name: "postgres", Check: func(context.Context) error { return nil }},
 		platformhttp.DependencyCheck{Name: "redis", Check: func(context.Context) error { return errors.New("connection refused") }},
-	)
+	))
 
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", rec.Code)

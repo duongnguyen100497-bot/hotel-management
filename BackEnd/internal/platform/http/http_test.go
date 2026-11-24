@@ -12,12 +12,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-chi/chi/v5"
+	"github.com/gin-gonic/gin"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/apperror"
 	platformhttp "github.com/trandinh0506/hotel-management/backend/internal/platform/http"
 )
 
 func TestWriteError_MapsAllCanonicalStatuses(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
 	cases := []struct {
 		name       string
 		err        error
@@ -38,11 +40,12 @@ func TestWriteError_MapsAllCanonicalStatuses(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
-			req = req.WithContext(platformhttp.WithRequestID(req.Context(), "req-test-123"))
 			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
+			c.Request = req.WithContext(platformhttp.WithRequestID(req.Context(), "req-test-123"))
 
-			platformhttp.WriteError(rec, req, tc.err)
+			platformhttp.WriteError(c, tc.err)
 
 			if rec.Code != tc.wantStatus {
 				t.Fatalf("status = %d, want %d", rec.Code, tc.wantStatus)
@@ -70,8 +73,8 @@ func TestRouter_PanicRecoveryReturnsClean500(t *testing.T) {
 
 	r := platformhttp.NewRouter(platformhttp.RouterConfig{
 		Logger: logger,
-	}, func(api chi.Router) {
-		api.Get("/boom", func(http.ResponseWriter, *http.Request) {
+	}, func(api *gin.RouterGroup) {
+		api.GET("/boom", func(*gin.Context) {
 			panic("secret db crash trace")
 		})
 	})
@@ -101,14 +104,14 @@ func TestRouter_PanicRecoveryReturnsClean500(t *testing.T) {
 func TestRouter_BodyLimitRejection(t *testing.T) {
 	r := platformhttp.NewRouter(platformhttp.RouterConfig{
 		BodyLimitBytes: 32,
-	}, func(api chi.Router) {
-		api.Post("/items", func(w http.ResponseWriter, req *http.Request) {
+	}, func(api *gin.RouterGroup) {
+		api.POST("/items", func(c *gin.Context) {
 			var dst map[string]any
-			if err := platformhttp.DecodeJSON(req, &dst); err != nil {
-				platformhttp.WriteError(w, req, err)
+			if err := platformhttp.DecodeJSON(c, &dst); err != nil {
+				platformhttp.WriteError(c, err)
 				return
 			}
-			platformhttp.WriteJSON(w, http.StatusOK, dst)
+			platformhttp.WriteJSON(c, http.StatusOK, dst)
 		})
 	})
 
@@ -132,12 +135,16 @@ func TestRouter_BodyLimitRejection(t *testing.T) {
 }
 
 func TestDecodeJSON_RejectsUnknownFields(t *testing.T) {
+	gin.SetMode(gin.TestMode)
 	type createDTO struct {
 		Name string `json:"name"`
 	}
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/items", strings.NewReader(`{"name":"Deluxe","extra":"forbidden"}`))
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/items", strings.NewReader(`{"name":"Deluxe","extra":"forbidden"}`))
+
 	var dto createDTO
-	err := platformhttp.DecodeJSON(req, &dto)
+	err := platformhttp.DecodeJSON(c, &dto)
 	if err == nil {
 		t.Fatal("expected error for unknown JSON field")
 	}
@@ -152,15 +159,17 @@ func TestDecodeJSON_RejectsUnknownFields(t *testing.T) {
 
 func TestRateLimitMiddleware_Returns429(t *testing.T) {
 	limiter := platformhttp.NewInMemoryRateLimiter(2, time.Minute)
-	handler := platformhttp.RateLimitMiddleware(limiter, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+	r := platformhttp.NewRouter(platformhttp.RouterConfig{}, func(api *gin.RouterGroup) {
+		api.POST("/auth/login", platformhttp.RateLimitMiddleware(limiter, nil), func(c *gin.Context) {
+			c.Status(http.StatusOK)
+		})
+	})
 
 	for i := 1; i <= 3; i++ {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
 		req.RemoteAddr = "127.0.0.1:12345"
 		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
+		r.ServeHTTP(rec, req)
 
 		if i <= 2 && rec.Code != http.StatusOK {
 			t.Fatalf("request %d: status = %d, want 200", i, rec.Code)
@@ -194,21 +203,25 @@ func TestCORS_ExactAllowlistOnly(t *testing.T) {
 }
 
 func TestHeadersAndPaginationHelpers(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/rooms?limit=25&cursor=abc123", nil)
 	req.Header.Set("Idempotency-Key", "  idem-001 ")
 	req.Header.Set("If-Match", `W/"7"`)
+	c.Request = req
 
-	limit, cursor, err := platformhttp.ParseCursorParams(req, 20, 100)
+	limit, cursor, err := platformhttp.ParseCursorParams(c, 20, 100)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if limit != 25 || cursor != "abc123" {
 		t.Fatalf("got limit=%d cursor=%q", limit, cursor)
 	}
-	if got := platformhttp.IdempotencyKey(req); got != "idem-001" {
+	if got := platformhttp.IdempotencyKey(c); got != "idem-001" {
 		t.Errorf("IdempotencyKey = %q, want idem-001", got)
 	}
-	if got := platformhttp.IfMatch(req); got != "7" {
+	if got := platformhttp.IfMatch(c); got != "7" {
 		t.Errorf("IfMatch = %q, want 7", got)
 	}
 }

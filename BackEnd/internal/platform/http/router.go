@@ -2,14 +2,13 @@ package platformhttp
 
 import (
 	"log/slog"
-	"net/http"
 	"time"
 
-	"github.com/go-chi/chi/v5"
+	"github.com/gin-gonic/gin"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/apperror"
 )
 
-// RouterConfig configures base middlewares, probes, and API mounting for the root chi router.
+// RouterConfig configures base middlewares, probes, and API mounting for the root Gin engine.
 type RouterConfig struct {
 	Logger             *slog.Logger
 	CORSAllowedOrigins []string
@@ -18,32 +17,36 @@ type RouterConfig struct {
 	ReadyzChecks       []DependencyCheck
 }
 
-// NewRouter constructs the canonical chi router with base middlewares, /healthz, /readyz,
+// NewRouter constructs the canonical Gin engine with base middlewares, /healthz, /readyz,
 // and the /api/v1 route group.
-func NewRouter(cfg RouterConfig, mountAPI func(r chi.Router)) *chi.Mux {
-	r := chi.NewRouter()
+func NewRouter(cfg RouterConfig, mountAPI func(api *gin.RouterGroup)) *gin.Engine {
+	gin.SetMode(gin.ReleaseMode)
 
-	r.Use(RequestIDMiddleware())
-	r.Use(PanicRecovery(cfg.Logger))
-	r.Use(StructuredRequestLogger(cfg.Logger))
-	r.Use(CORS(cfg.CORSAllowedOrigins))
-	r.Use(BodyLimit(cfg.BodyLimitBytes))
+	r := gin.New()
+	r.HandleMethodNotAllowed = true
 
-	r.NotFound(func(w http.ResponseWriter, req *http.Request) {
-		WriteError(w, req, apperror.NotFound("endpoint not found"))
+	r.Use(
+		RequestIDMiddleware(),
+		PanicRecovery(cfg.Logger),
+		StructuredRequestLogger(cfg.Logger),
+		CORS(cfg.CORSAllowedOrigins),
+		BodyLimit(cfg.BodyLimitBytes),
+	)
+
+	r.NoRoute(func(c *gin.Context) {
+		WriteError(c, apperror.NotFound("endpoint not found"))
 	})
-	r.MethodNotAllowed(func(w http.ResponseWriter, req *http.Request) {
-		WriteError(w, req, apperror.Validation("method not allowed"))
+	r.NoMethod(func(c *gin.Context) {
+		WriteError(c, apperror.Validation("method not allowed"))
 	})
 
-	r.Get("/healthz", HealthzHandler())
-	r.Get("/readyz", ReadyzHandler(cfg.ReadyzTimeout, cfg.ReadyzChecks...))
+	r.GET("/healthz", HealthzHandler())
+	r.GET("/readyz", ReadyzHandler(cfg.ReadyzTimeout, cfg.ReadyzChecks...))
 
-	r.Route("/api/v1", func(api chi.Router) {
-		if mountAPI != nil {
-			mountAPI(api)
-		}
-	})
+	api := r.Group("/api/v1")
+	if mountAPI != nil {
+		mountAPI(api)
+	}
 
 	return r
 }

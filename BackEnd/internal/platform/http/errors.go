@@ -1,9 +1,9 @@
 package platformhttp
 
 import (
-	"encoding/json"
 	"net/http"
 
+	"github.com/gin-gonic/gin"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/apperror"
 )
 
@@ -64,13 +64,12 @@ func statusFromCode(code string) int {
 	}
 }
 
-// WriteError encodes an error using the standard ErrorEnvelope and attaches requestId from context.
-func WriteError(w http.ResponseWriter, r *http.Request, err error) {
+// WriteError encodes an error using the standard ErrorEnvelope, attaches requestId from context,
+// and aborts the Gin middleware chain.
+func WriteError(c *gin.Context, err error) {
 	status, body := StatusFromError(err)
-	if r != nil {
-		body.RequestID = RequestIDFromContext(r.Context())
+	if c != nil && c.Request != nil {
+		body.RequestID = RequestIDFromContext(c.Request.Context())
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(ErrorEnvelope{Error: body})
+	c.AbortWithStatusJSON(status, ErrorEnvelope{Error: body})
 }

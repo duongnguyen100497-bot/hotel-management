@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/gin-gonic/gin"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/apperror"
 )
 
@@ -26,23 +27,22 @@ type PageResponse[T any] struct {
 }
 
 // WriteJSON encodes payload as JSON with the provided HTTP status code.
-func WriteJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
+func WriteJSON(c *gin.Context, status int, payload any) {
 	if payload == nil {
+		c.Status(status)
 		return
 	}
-	_ = json.NewEncoder(w).Encode(payload)
+	c.JSON(status, payload)
 }
 
 // DecodeJSON decodes a JSON request body strictly (DisallowUnknownFields, single JSON value).
 // Returns apperror.PayloadTooLarge on MaxBytesError or apperror.Validation on malformed/unknown fields.
-func DecodeJSON(r *http.Request, dst any) error {
-	if r == nil || r.Body == nil {
+func DecodeJSON(c *gin.Context, dst any) error {
+	if c == nil || c.Request == nil || c.Request.Body == nil {
 		return apperror.Validation("request body is required")
 	}
 
-	dec := json.NewDecoder(r.Body)
+	dec := json.NewDecoder(c.Request.Body)
 	dec.DisallowUnknownFields()
 
 	if err := dec.Decode(dst); err != nil {
@@ -86,7 +86,7 @@ func DecodeJSON(r *http.Request, dst any) error {
 }
 
 // ParseCursorParams parses ?limit= and ?cursor= query parameters safely.
-func ParseCursorParams(r *http.Request, defaultLimit, maxLimit int) (int, string, error) {
+func ParseCursorParams(c *gin.Context, defaultLimit, maxLimit int) (int, string, error) {
 	if defaultLimit <= 0 {
 		defaultLimit = 20
 	}
@@ -95,7 +95,7 @@ func ParseCursorParams(r *http.Request, defaultLimit, maxLimit int) (int, string
 	}
 
 	limit := defaultLimit
-	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed <= 0 || parsed > maxLimit {
 			return 0, "", apperror.Validation("invalid pagination parameter", apperror.FieldError{
@@ -105,24 +105,24 @@ func ParseCursorParams(r *http.Request, defaultLimit, maxLimit int) (int, string
 		}
 		limit = parsed
 	}
-	cursor := strings.TrimSpace(r.URL.Query().Get("cursor"))
+	cursor := strings.TrimSpace(c.Query("cursor"))
 	return limit, cursor, nil
 }
 
 // IdempotencyKey extracts the trimmed Idempotency-Key header value.
-func IdempotencyKey(r *http.Request) string {
-	if r == nil {
+func IdempotencyKey(c *gin.Context) string {
+	if c == nil {
 		return ""
 	}
-	return strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	return strings.TrimSpace(c.GetHeader("Idempotency-Key"))
 }
 
 // IfMatch extracts the trimmed If-Match header value (unquoting optional weak/strong ETag quotes).
-func IfMatch(r *http.Request) string {
-	if r == nil {
+func IfMatch(c *gin.Context) string {
+	if c == nil {
 		return ""
 	}
-	raw := strings.TrimSpace(r.Header.Get("If-Match"))
+	raw := strings.TrimSpace(c.GetHeader("If-Match"))
 	raw = strings.TrimPrefix(raw, "W/")
 	return strings.Trim(raw, `"`)
 }

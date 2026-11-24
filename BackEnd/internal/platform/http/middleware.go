@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"runtime/debug"
 	"strconv"
@@ -12,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/apperror"
 )
@@ -76,27 +76,26 @@ func WithCorrelationID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, ctxKeyCorrelationID, id)
 }
 
-// RequestIDMiddleware attaches X-Request-Id and X-Correlation-Id to the context and response headers.
-func RequestIDMiddleware() func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			reqID := sanitizeHeaderID(r.Header.Get(HeaderRequestID))
-			if reqID == "" {
-				reqID = uuid.NewString()
-			}
-			corrID := sanitizeHeaderID(r.Header.Get(HeaderCorrelationID))
-			if corrID == "" {
-				corrID = reqID
-			}
+// RequestIDMiddleware attaches X-Request-Id and X-Correlation-Id to the request context and response headers.
+func RequestIDMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		reqID := sanitizeHeaderID(c.GetHeader(HeaderRequestID))
+		if reqID == "" {
+			reqID = uuid.NewString()
+		}
+		corrID := sanitizeHeaderID(c.GetHeader(HeaderCorrelationID))
+		if corrID == "" {
+			corrID = reqID
+		}
 
-			ctx := WithRequestID(r.Context(), reqID)
-			ctx = WithCorrelationID(ctx, corrID)
+		ctx := WithRequestID(c.Request.Context(), reqID)
+		ctx = WithCorrelationID(ctx, corrID)
+		c.Request = c.Request.WithContext(ctx)
 
-			w.Header().Set(HeaderRequestID, reqID)
-			w.Header().Set(HeaderCorrelationID, corrID)
+		c.Header(HeaderRequestID, reqID)
+		c.Header(HeaderCorrelationID, corrID)
 
-			next.ServeHTTP(w, r.WithContext(ctx))
-		})
+		c.Next()
 	}
 }
 
@@ -115,72 +114,47 @@ func sanitizeHeaderID(raw string) string {
 }
 
 // PanicRecovery catches panics, logs stack traces server-side, and writes a clean 500 error envelope.
-func PanicRecovery(logger *slog.Logger) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			defer func() {
-				if rec := recover(); rec != nil {
-					if logger != nil {
-						logger.Error("panic recovered in http handler",
-							slog.Any("panic", rec),
-							slog.String("method", r.Method),
-							slog.String("path", r.URL.Path),
-							slog.String("request_id", RequestIDFromContext(r.Context())),
-							slog.String("stack", string(debug.Stack())),
-						)
-					}
-					WriteError(w, r, apperror.Internal(fmt.Errorf("panic: %v", rec)))
+func PanicRecovery(logger *slog.Logger) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				if logger != nil {
+					logger.Error("panic recovered in http handler",
+						slog.Any("panic", rec),
+						slog.String("method", c.Request.Method),
+						slog.String("path", c.Request.URL.Path),
+						slog.String("request_id", RequestIDFromContext(c.Request.Context())),
+						slog.String("stack", string(debug.Stack())),
+					)
 				}
-			}()
-			next.ServeHTTP(w, r)
-		})
+				WriteError(c, apperror.Internal(fmt.Errorf("panic: %v", rec)))
+			}
+		}()
+		c.Next()
 	}
-}
-
-type statusRecorder struct {
-	http.ResponseWriter
-	status int
-	bytes  int
-}
-
-func (sr *statusRecorder) WriteHeader(code int) {
-	sr.status = code
-	sr.ResponseWriter.WriteHeader(code)
-}
-
-func (sr *statusRecorder) Write(b []byte) (int, error) {
-	if sr.status == 0 {
-		sr.status = http.StatusOK
-	}
-	n, err := sr.ResponseWriter.Write(b)
-	sr.bytes += n
-	return n, err
 }
 
 // StructuredRequestLogger emits one structured JSON log per completed HTTP request.
-func StructuredRequestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			start := time.Now()
-			rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-			next.ServeHTTP(rec, r)
-			if logger != nil {
-				logger.Info("http request",
-					slog.String("method", r.Method),
-					slog.String("path", r.URL.Path),
-					slog.Int("status", rec.status),
-					slog.Int("bytes", rec.bytes),
-					slog.Int64("duration_ms", time.Since(start).Milliseconds()),
-					slog.String("request_id", RequestIDFromContext(r.Context())),
-					slog.String("correlation_id", CorrelationIDFromContext(r.Context())),
-				)
-			}
-		})
+func StructuredRequestLogger(logger *slog.Logger) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := time.Now()
+		c.Next()
+		if logger != nil {
+			logger.Info("http request",
+				slog.String("method", c.Request.Method),
+				slog.String("path", c.Request.URL.Path),
+				slog.Int("status", c.Writer.Status()),
+				slog.Int("bytes", max(c.Writer.Size(), 0)),
+				slog.Int64("duration_ms", time.Since(start).Milliseconds()),
+				slog.String("request_id", RequestIDFromContext(c.Request.Context())),
+				slog.String("correlation_id", CorrelationIDFromContext(c.Request.Context())),
+			)
+		}
 	}
 }
 
 // CORS enforces an exact origin allowlist without wildcard credential reflection.
-func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
+func CORS(allowedOrigins []string) gin.HandlerFunc {
 	allowed := make(map[string]struct{}, len(allowedOrigins))
 	for _, o := range allowedOrigins {
 		if trimmed := strings.TrimSpace(o); trimmed != "" {
@@ -188,42 +162,38 @@ func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
 		}
 	}
 
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			origin := r.Header.Get("Origin")
-			if origin != "" {
-				if _, ok := allowed[origin]; ok {
-					w.Header().Set("Access-Control-Allow-Origin", origin)
-					w.Header().Add("Vary", "Origin")
-					w.Header().Set("Access-Control-Allow-Credentials", "true")
-					w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-					w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, If-Match, X-Request-Id, X-Correlation-Id")
-					w.Header().Set("Access-Control-Expose-Headers", "X-Request-Id, X-Correlation-Id, ETag")
-				}
+	return func(c *gin.Context) {
+		origin := c.GetHeader("Origin")
+		if origin != "" {
+			if _, ok := allowed[origin]; ok {
+				c.Header("Access-Control-Allow-Origin", origin)
+				c.Writer.Header().Add("Vary", "Origin")
+				c.Header("Access-Control-Allow-Credentials", "true")
+				c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+				c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, If-Match, X-Request-Id, X-Correlation-Id")
+				c.Header("Access-Control-Expose-Headers", "X-Request-Id, X-Correlation-Id, ETag")
 			}
-			if r.Method == http.MethodOptions {
-				w.WriteHeader(http.StatusNoContent)
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
+		}
+		if c.Request.Method == http.MethodOptions {
+			c.AbortWithStatus(http.StatusNoContent)
+			return
+		}
+		c.Next()
 	}
 }
 
 // BodyLimit caps incoming request body size (defaults to 1 MiB).
-func BodyLimit(maxBytes int64) func(http.Handler) http.Handler {
+func BodyLimit(maxBytes int64) gin.HandlerFunc {
 	if maxBytes <= 0 {
 		maxBytes = DefaultBodyLimitBytes
 	}
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.ContentLength > maxBytes {
-				WriteError(w, r, apperror.PayloadTooLarge("request body exceeds maximum allowed size"))
-				return
-			}
-			r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
-			next.ServeHTTP(w, r)
-		})
+	return func(c *gin.Context) {
+		if c.Request.ContentLength > maxBytes {
+			WriteError(c, apperror.PayloadTooLarge("request body exceeds maximum allowed size"))
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes)
+		c.Next()
 	}
 }
 
@@ -285,46 +255,29 @@ func (l *InMemoryRateLimiter) Allow(_ context.Context, key string) (bool, time.D
 }
 
 // RateLimitMiddleware applies a RateLimiter to requests keyed by keyFunc (defaults to client IP).
-func RateLimitMiddleware(limiter RateLimiter, keyFunc func(*http.Request) string) func(http.Handler) http.Handler {
+func RateLimitMiddleware(limiter RateLimiter, keyFunc func(*gin.Context) string) gin.HandlerFunc {
 	if keyFunc == nil {
-		keyFunc = ClientIP
+		keyFunc = func(c *gin.Context) string { return c.ClientIP() }
 	}
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if limiter == nil {
-				next.ServeHTTP(w, r)
-				return
-			}
-			allowed, retryAfter, err := limiter.Allow(r.Context(), keyFunc(r))
-			if err != nil {
-				WriteError(w, r, apperror.ServiceUnavailable("rate limiter unavailable"))
-				return
-			}
-			if !allowed {
-				secs := int(retryAfter.Seconds())
-				if secs < 1 {
-					secs = 1
-				}
-				w.Header().Set("Retry-After", strconv.Itoa(secs))
-				WriteError(w, r, apperror.RateLimited("too many requests"))
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
-}
-
-// ClientIP returns the caller's IP address without port.
-func ClientIP(r *http.Request) string {
-	if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
-		parts := strings.Split(xff, ",")
-		if ip := strings.TrimSpace(parts[0]); ip != "" {
-			return ip
+	return func(c *gin.Context) {
+		if limiter == nil {
+			c.Next()
+			return
 		}
+		allowed, retryAfter, err := limiter.Allow(c.Request.Context(), keyFunc(c))
+		if err != nil {
+			WriteError(c, apperror.ServiceUnavailable("rate limiter unavailable"))
+			return
+		}
+		if !allowed {
+			secs := int(retryAfter.Seconds())
+			if secs < 1 {
+				secs = 1
+			}
+			c.Header("Retry-After", strconv.Itoa(secs))
+			WriteError(c, apperror.RateLimited("too many requests"))
+			return
+		}
+		c.Next()
 	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }

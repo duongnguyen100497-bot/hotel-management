@@ -2,11 +2,12 @@ package platformhttp
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 // CheckFunc verifies readiness of a backing dependency.
@@ -29,22 +30,20 @@ type readyResponse struct {
 }
 
 // HealthzHandler responds 200 OK whenever the process is alive.
-func HealthzHandler() http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(healthResponse{Status: "ok"})
+func HealthzHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.JSON(http.StatusOK, healthResponse{Status: "ok"})
 	}
 }
 
 // ReadyzHandler runs all dependency checks concurrently within timeout and returns
 // 200 OK if all succeed or 503 Service Unavailable with failed dependency names.
-func ReadyzHandler(timeout time.Duration, deps ...DependencyCheck) http.HandlerFunc {
+func ReadyzHandler(timeout time.Duration, deps ...DependencyCheck) gin.HandlerFunc {
 	if timeout <= 0 {
 		timeout = 3 * time.Second
 	}
-	return func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	return func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
 		defer cancel()
 
 		checks := make(map[string]string, len(deps))
@@ -85,8 +84,6 @@ func ReadyzHandler(timeout time.Duration, deps ...DependencyCheck) http.HandlerF
 			status = http.StatusServiceUnavailable
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
-		_ = json.NewEncoder(w).Encode(resp)
+		c.JSON(status, resp)
 	}
 }
