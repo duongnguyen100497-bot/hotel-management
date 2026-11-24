@@ -17,6 +17,7 @@ import (
 	auditpg "github.com/trandinh0506/hotel-management/backend/internal/modules/audit/persistence/postgres"
 	"github.com/trandinh0506/hotel-management/backend/internal/modules/notification"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/clock"
+	"github.com/trandinh0506/hotel-management/backend/internal/platform/db"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/id"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/testutil"
 )
@@ -233,5 +234,73 @@ func TestOutboxWorker_ConcurrentWorkersSkipLockedNoDoubleProcessing(t *testing.T
 		if count != 1 {
 			t.Errorf("event %s processed %d times, want 1", id, count)
 		}
+	}
+}
+
+func TestOutboxWorker_FailedHandlerWritesRolledBackAndEventsIsolated(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Testcontainers integration test in short mode")
+	}
+
+	env := testutil.StartPostgres(t)
+	ctx := context.Background()
+	if _, err := env.Pool.Exec(ctx, `CREATE TABLE handler_side_effects (event_id uuid PRIMARY KEY)`); err != nil {
+		t.Fatalf("create scratch table: %v", err)
+	}
+
+	clk := clock.NewFixed(time.Date(2026, 11, 24, 14, 0, 0, 0, time.UTC))
+	auditSvc := auditapp.NewService(auditpg.NewRepository(env.Pool), clk, id.NewUUIDGenerator())
+	worker := notification.NewWorker(env.TxRunner, auditSvc, clk, nil, notification.WorkerConfig{BatchSize: 10})
+
+	writeSideEffect := func(ctx context.Context, evt auditapp.OutboxEvent) error {
+		_, err := db.Querier(ctx, env.Pool).Exec(ctx, `INSERT INTO handler_side_effects (event_id) VALUES ($1)`, evt.ID)
+		return err
+	}
+	worker.Register("test.ok", writeSideEffect)
+	worker.Register("test.fail", func(ctx context.Context, evt auditapp.OutboxEvent) error {
+		if err := writeSideEffect(ctx, evt); err != nil {
+			return err
+		}
+		return errors.New("fail after writing")
+	})
+
+	okID, failID := uuid.New(), uuid.New()
+	for _, e := range []struct {
+		id  uuid.UUID
+		typ string
+	}{{okID, "test.ok"}, {failID, "test.fail"}} {
+		if err := auditSvc.Enqueue(ctx, auditapp.OutboxEvent{
+			ID: e.id, AggregateType: "test", AggregateID: uuid.New(), EventType: e.typ,
+		}); err != nil {
+			t.Fatalf("enqueue %s: %v", e.typ, err)
+		}
+	}
+
+	if n, err := worker.ProcessOnce(ctx); err != nil || n != 2 {
+		t.Fatalf("ProcessOnce: claimed=%d err=%v, want 2 nil", n, err)
+	}
+
+	var okWritten, failWritten bool
+	q := `SELECT EXISTS (SELECT 1 FROM handler_side_effects WHERE event_id = $1)`
+	if err := env.Pool.QueryRow(ctx, q, okID).Scan(&okWritten); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.Pool.QueryRow(ctx, q, failID).Scan(&failWritten); err != nil {
+		t.Fatal(err)
+	}
+	if !okWritten {
+		t.Error("successful handler's write should be committed")
+	}
+	if failWritten {
+		t.Error("failed handler's write should be rolled back")
+	}
+
+	var attempts int
+	var processedAt *time.Time
+	if err := env.Pool.QueryRow(ctx, `SELECT attempts, processed_at FROM outbox_events WHERE id = $1`, failID).Scan(&attempts, &processedAt); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 1 || processedAt != nil {
+		t.Fatalf("failed event: attempts=%d processed_at=%v, want 1 and nil", attempts, processedAt)
 	}
 }

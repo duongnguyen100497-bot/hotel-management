@@ -208,12 +208,15 @@ type fixedWindowEntry struct {
 }
 
 // InMemoryRateLimiter implements a thread-safe fixed-window RateLimiter.
+// Expired keys are swept at most once per window so memory stays bounded by
+// the number of distinct keys seen within roughly one window.
 type InMemoryRateLimiter struct {
-	mu      sync.Mutex
-	limit   int
-	window  time.Duration
-	nowFunc func() time.Time
-	entries map[string]fixedWindowEntry
+	mu        sync.Mutex
+	limit     int
+	window    time.Duration
+	nowFunc   func() time.Time
+	entries   map[string]fixedWindowEntry
+	lastSweep time.Time
 }
 
 // NewInMemoryRateLimiter constructs an in-memory rate limiter allowing limit requests per window.
@@ -238,6 +241,15 @@ func (l *InMemoryRateLimiter) Allow(_ context.Context, key string) (bool, time.D
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	if now.Sub(l.lastSweep) >= l.window {
+		for k, e := range l.entries {
+			if !now.Before(e.resetAt) {
+				delete(l.entries, k)
+			}
+		}
+		l.lastSweep = now
+	}
+
 	entry, ok := l.entries[key]
 	if !ok || !now.Before(entry.resetAt) {
 		l.entries[key] = fixedWindowEntry{
@@ -247,7 +259,7 @@ func (l *InMemoryRateLimiter) Allow(_ context.Context, key string) (bool, time.D
 		return true, 0, nil
 	}
 	if entry.count >= l.limit {
-		return false, time.Until(entry.resetAt), nil
+		return false, entry.resetAt.Sub(now), nil
 	}
 	entry.count++
 	l.entries[key] = entry

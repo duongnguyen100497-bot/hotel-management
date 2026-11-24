@@ -106,3 +106,36 @@ func (r *PgxTxRunner) WithinTx(ctx context.Context, fn func(ctx context.Context)
 	committed = true
 	return nil
 }
+
+// WithinSavepoint runs fn inside a SAVEPOINT of the transaction carried by ctx.
+// If fn returns an error or panics, only fn's writes are rolled back and the
+// outer transaction stays usable. Without an active transaction, fn runs as-is.
+func WithinSavepoint(ctx context.Context, fn func(ctx context.Context) error) (err error) {
+	tx, ok := TxFromContext(ctx)
+	if !ok {
+		return fn(ctx)
+	}
+	sp, err := tx.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin savepoint: %w", err)
+	}
+	released := false
+	defer func() {
+		if rec := recover(); rec != nil {
+			_ = sp.Rollback(context.Background())
+			panic(rec)
+		}
+		if !released {
+			_ = sp.Rollback(context.Background())
+		}
+	}()
+
+	if err = fn(WithTx(ctx, sp)); err != nil {
+		return err
+	}
+	if err = sp.Commit(ctx); err != nil {
+		return fmt.Errorf("release savepoint: %w", err)
+	}
+	released = true
+	return nil
+}

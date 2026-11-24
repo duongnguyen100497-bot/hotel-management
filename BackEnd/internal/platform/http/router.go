@@ -37,7 +37,7 @@ func NewRouter(cfg RouterConfig, mountAPI func(api *gin.RouterGroup)) *gin.Engin
 		WriteError(c, apperror.NotFound("endpoint not found"))
 	})
 	r.NoMethod(func(c *gin.Context) {
-		WriteError(c, apperror.Validation("method not allowed"))
+		WriteError(c, apperror.MethodNotAllowed(""))
 	})
 
 	r.GET("/healthz", HealthzHandler())

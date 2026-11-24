@@ -225,3 +225,21 @@ func TestHeadersAndPaginationHelpers(t *testing.T) {
 		t.Errorf("IfMatch = %q, want 7", got)
 	}
 }
+
+func TestRouter_WrongMethodReturns405(t *testing.T) {
+	router := platformhttp.NewRouter(platformhttp.RouterConfig{}, nil)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/healthz", nil))
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rec.Code)
+	}
+	var env platformhttp.ErrorEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if env.Error.Code != apperror.CodeMethodNotAllowed {
+		t.Fatalf("code = %q, want %q", env.Error.Code, apperror.CodeMethodNotAllowed)
+	}
+}

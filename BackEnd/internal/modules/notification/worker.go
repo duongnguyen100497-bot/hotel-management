@@ -69,6 +69,10 @@ func NewWorker(
 }
 
 // Register binds a handler to an outbox event_type.
+//
+// Delivery is at-least-once: if the process crashes or the settle step fails
+// after the handler's side effect (e.g. an email was sent), the event is retried.
+// Handlers MUST therefore be idempotent (e.g. dedupe by event.ID).
 func (w *Worker) Register(eventType string, handler HandlerFunc) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -99,70 +103,83 @@ func (w *Worker) Run(ctx context.Context) {
 	}
 }
 
-// ProcessOnce claims up to BatchSize due events in a single transaction using FOR UPDATE SKIP LOCKED,
-// dispatches each to its handler, and marks each processed or failed with exponential backoff.
+// ProcessOnce handles up to BatchSize due events. Each event is claimed with
+// FOR UPDATE SKIP LOCKED and settled in its OWN transaction, so a failure while
+// settling one event never rolls back (and re-runs) handlers of other events.
+// It returns how many events were claimed (succeeded or failed).
 func (w *Worker) ProcessOnce(ctx context.Context) (int, error) {
-	claimedCount := 0
-
-	err := w.txRunner.WithinTx(ctx, func(txCtx context.Context) error {
-		now := w.clk.Now()
-		events, err := w.outbox.ClaimPending(txCtx, now, w.cfg.BatchSize)
+	claimed := 0
+	for claimed < w.cfg.BatchSize && ctx.Err() == nil {
+		ok, err := w.processNext(ctx)
 		if err != nil {
+			return claimed, err
+		}
+		if !ok {
+			break
+		}
+		claimed++
+	}
+	return claimed, nil
+}
+
+// processNext claims, dispatches and settles a single event. It reports false when nothing is due.
+func (w *Worker) processNext(ctx context.Context) (bool, error) {
+	claimed := false
+	err := w.txRunner.WithinTx(ctx, func(txCtx context.Context) error {
+		events, err := w.outbox.ClaimPending(txCtx, w.clk.Now(), 1)
+		if err != nil || len(events) == 0 {
 			return err
 		}
-		claimedCount = len(events)
+		claimed = true
+		evt := events[0]
 
-		for _, evt := range events {
-			handler, ok := w.handlerFor(evt.EventType)
-			var handleErr error
-			if !ok {
-				handleErr = fmt.Errorf("no outbox handler registered for event_type %q", evt.EventType)
-			} else {
-				handleErr = handler(txCtx, evt)
-			}
-
-			if handleErr == nil {
-				if err := w.outbox.MarkProcessed(txCtx, evt.ID, w.clk.Now()); err != nil {
-					return err
-				}
-				continue
-			}
-
-			nextAttempts := evt.Attempts + 1
-			backoff := w.backoffDuration(evt.Attempts)
-			nextAvailable := w.clk.Now().Add(backoff)
-
-			if err := w.outbox.MarkFailed(txCtx, evt.ID, handleErr.Error(), nextAvailable); err != nil {
-				return err
-			}
-
-			if nextAttempts >= evt.MaxAttempts {
-				if w.logger != nil {
-					w.logger.Error("outbox event dead_letter",
-						slog.String("event_id", evt.ID.String()),
-						slog.String("event_type", evt.EventType),
-						slog.Int("attempts", nextAttempts),
-						slog.Int("max_attempts", evt.MaxAttempts),
-						slog.String("last_error", handleErr.Error()),
-					)
-				}
-			} else if w.logger != nil {
-				w.logger.Warn("outbox event failed; scheduled retry",
-					slog.String("event_id", evt.ID.String()),
-					slog.String("event_type", evt.EventType),
-					slog.Int("attempts", nextAttempts),
-					slog.Time("next_available_at", nextAvailable),
-					slog.String("last_error", handleErr.Error()),
-				)
-			}
+		handleErr := w.dispatch(txCtx, evt)
+		if handleErr == nil {
+			return w.outbox.MarkProcessed(txCtx, evt.ID, w.clk.Now())
 		}
 
+		nextAttempts := evt.Attempts + 1
+		nextAvailable := w.clk.Now().Add(w.backoffDuration(evt.Attempts))
+		if err := w.outbox.MarkFailed(txCtx, evt.ID, handleErr.Error(), nextAvailable); err != nil {
+			return err
+		}
+
+		if w.logger == nil {
+			return nil
+		}
+		if nextAttempts >= evt.MaxAttempts {
+			w.logger.Error("outbox event dead_letter",
+				slog.String("event_id", evt.ID.String()),
+				slog.String("event_type", evt.EventType),
+				slog.Int("attempts", nextAttempts),
+				slog.Int("max_attempts", evt.MaxAttempts),
+				slog.String("last_error", handleErr.Error()),
+			)
+		} else {
+			w.logger.Warn("outbox event failed; scheduled retry",
+				slog.String("event_id", evt.ID.String()),
+				slog.String("event_type", evt.EventType),
+				slog.Int("attempts", nextAttempts),
+				slog.Time("next_available_at", nextAvailable),
+				slog.String("last_error", handleErr.Error()),
+			)
+		}
 		return nil
 	})
-	if err != nil {
-		return 0, err
+	return claimed, err
+}
+
+// dispatch runs the registered handler inside a SAVEPOINT so that any DB writes
+// the handler made are rolled back when it fails, while the attempt counter
+// update (MarkFailed) still commits in the outer transaction.
+func (w *Worker) dispatch(ctx context.Context, evt auditapp.OutboxEvent) error {
+	handler, ok := w.handlerFor(evt.EventType)
+	if !ok {
+		return fmt.Errorf("no outbox handler registered for event_type %q", evt.EventType)
 	}
-	return claimedCount, nil
+	return db.WithinSavepoint(ctx, func(spCtx context.Context) error {
+		return handler(spCtx, evt)
+	})
 }
 
 func (w *Worker) backoffDuration(priorAttempts int) time.Duration {

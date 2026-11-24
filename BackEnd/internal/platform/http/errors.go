@@ -51,6 +51,8 @@ func statusFromCode(code string) int {
 		return http.StatusForbidden
 	case apperror.CodeNotFound:
 		return http.StatusNotFound
+	case apperror.CodeMethodNotAllowed:
+		return http.StatusMethodNotAllowed
 	case apperror.CodeConflict, apperror.CodeVersionConflict:
 		return http.StatusConflict
 	case apperror.CodePayloadTooLarge:

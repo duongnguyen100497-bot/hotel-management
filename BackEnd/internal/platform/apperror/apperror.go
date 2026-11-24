@@ -11,6 +11,7 @@ const (
 	CodeUnauthenticated    = "unauthenticated"
 	CodeForbidden          = "forbidden"
 	CodeNotFound           = "not_found"
+	CodeMethodNotAllowed   = "method_not_allowed"
 	CodeConflict           = "conflict"
 	CodeVersionConflict    = "version_conflict"
 	CodePayloadTooLarge    = "payload_too_large"
@@ -93,6 +94,13 @@ func NotFound(message string) *Error {
 		message = "resource not found"
 	}
 	return &Error{Code: CodeNotFound, Message: message}
+}
+
+func MethodNotAllowed(message string) *Error {
+	if message == "" {
+		message = "method not allowed"
+	}
+	return &Error{Code: CodeMethodNotAllowed, Message: message}
 }
 
 func Conflict(message string) *Error {

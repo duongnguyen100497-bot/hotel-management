@@ -47,9 +47,9 @@ func TestArchitectureBoundaryRules_DetectsViolations(t *testing.T) {
 			wantViolation: true,
 		},
 		{
-			name: "domain_imports_chi",
+			name: "any_package_imports_chi",
 			pkgs: map[string][]string{
-				moduleRootPath + "/internal/modules/booking/domain": {"github.com/go-chi/chi/v5"},
+				moduleRootPath + "/internal/platform/http": {"github.com/go-chi/chi/v5"},
 			},
 			wantViolation: true,
 		},
@@ -185,6 +185,12 @@ func checkImportViolations(modPrefix string, pkgs map[string][]string) []string 
 	sort.Strings(pkgNames)
 
 	for _, pkg := range pkgNames {
+		// Rule 0: the project standardizes on Gin; chi must not be imported anywhere.
+		for _, imp := range pkgs[pkg] {
+			if strings.HasPrefix(imp, "github.com/go-chi/chi") {
+				violations = append(violations, fmt.Sprintf("%s must not import %s (use github.com/gin-gonic/gin)", pkg, imp))
+			}
+		}
 		if !strings.HasPrefix(pkg, modulesPrefix) {
 			continue
 		}
@@ -193,12 +199,11 @@ func checkImportViolations(modPrefix string, pkgs map[string][]string) []string 
 		isDeliveryHTTP := strings.HasPrefix(srcSubpath, "delivery/http") || hasSegment(srcSubpath, "delivery")
 
 		for _, imp := range pkgs[pkg] {
-			// Rule 1: domain cannot import net/http, gin, chi, pgx, platform/http, platform/db, or persistence.
+			// Rule 1: domain cannot import net/http, gin, pgx, platform/http, platform/db, or persistence.
 			if isDomain {
 				if imp == "net/http" ||
 					strings.HasPrefix(imp, "net/http/") ||
 					strings.HasPrefix(imp, "github.com/gin-gonic/gin") ||
-					strings.HasPrefix(imp, "github.com/go-chi/chi") ||
 					strings.HasPrefix(imp, "github.com/jackc/pgx") ||
 					strings.HasPrefix(imp, modPrefix+"/internal/platform/http") ||
 					strings.HasPrefix(imp, modPrefix+"/internal/platform/db") ||
