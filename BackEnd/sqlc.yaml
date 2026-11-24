@@ -1,12 +1,12 @@
 version: "2"
 sql:
   - engine: "postgresql"
-    queries: "db/query"
+    queries: "db/query/audit.sql"
     schema: "db/migration"
     gen:
       go:
         package: "sqlcgen"
-        out: "internal/platform/db/sqlcgen"
+        out: "internal/modules/audit/persistence/postgres/sqlcgen"
         sql_package: "pgx/v5"
         emit_interface: false
         emit_json_tags: true

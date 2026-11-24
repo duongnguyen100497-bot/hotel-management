@@ -16,9 +16,14 @@ import (
 	"syscall"
 	"time"
 
+	auditapp "github.com/trandinh0506/hotel-management/backend/internal/modules/audit/application"
+	auditpg "github.com/trandinh0506/hotel-management/backend/internal/modules/audit/persistence/postgres"
+	"github.com/trandinh0506/hotel-management/backend/internal/modules/notification"
+	"github.com/trandinh0506/hotel-management/backend/internal/platform/clock"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/config"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/db"
 	platformhttp "github.com/trandinh0506/hotel-management/backend/internal/platform/http"
+	"github.com/trandinh0506/hotel-management/backend/internal/platform/id"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/logging"
 )
 
@@ -62,7 +67,21 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		pool.Close()
 		return nil
 	})
-	_ = db.NewTxRunner(pool)
+	txRunner := db.NewTxRunner(pool)
+	sysClock := clock.NewSystem()
+	idGen := id.NewUUIDGenerator()
+
+	auditSvc := auditapp.NewService(auditpg.NewRepository(pool), sysClock, idGen)
+	outboxWorker := notification.NewWorker(txRunner, auditSvc, sysClock, logger, notification.WorkerConfig{
+		PollInterval: time.Second,
+		BatchSize:    20,
+	})
+
+	workerWG.Add(1)
+	go func() {
+		defer workerWG.Done()
+		outboxWorker.Run(workerCtx)
+	}()
 
 	deps := []platformhttp.DependencyCheck{
 		{Name: "postgres", Check: db.PingCheck(pool)},
