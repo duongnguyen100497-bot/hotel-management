@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/config"
+	"github.com/trandinh0506/hotel-management/backend/internal/platform/db"
 	platformhttp "github.com/trandinh0506/hotel-management/backend/internal/platform/http"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/logging"
 )
@@ -49,8 +50,22 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	workerCtx, cancelWorkers := context.WithCancel(ctx)
 	defer cancelWorkers()
 
+	pool, err := db.NewPool(ctx, db.PoolConfig{
+		DatabaseURL: cfg.DatabaseURL,
+		MaxConns:    cfg.DBMaxConns,
+		MinConns:    cfg.DBMinConns,
+	})
+	if err != nil {
+		return fmt.Errorf("init postgres pool: %w", err)
+	}
+	closers = append(closers, func() error {
+		pool.Close()
+		return nil
+	})
+	_ = db.NewTxRunner(pool)
+
 	deps := []platformhttp.DependencyCheck{
-		{Name: "postgres", Check: tcpProbeFromURL(cfg.DatabaseURL, "5432")},
+		{Name: "postgres", Check: db.PingCheck(pool)},
 		{Name: "redis", Check: redisPingProbe(cfg.RedisURL)},
 	}
 	if cfg.MinIOEnabled {
@@ -113,28 +128,6 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	}
 
 	return serveErr
-}
-
-func tcpProbeFromURL(rawURL, defaultPort string) platformhttp.CheckFunc {
-	return func(ctx context.Context) error {
-		u, err := url.Parse(rawURL)
-		if err != nil {
-			return err
-		}
-		host := u.Host
-		if host == "" {
-			return errors.New("empty host")
-		}
-		if _, _, err := net.SplitHostPort(host); err != nil {
-			host = net.JoinHostPort(host, defaultPort)
-		}
-		var d net.Dialer
-		conn, err := d.DialContext(ctx, "tcp", host)
-		if err != nil {
-			return err
-		}
-		return conn.Close()
-	}
 }
 
 func redisPingProbe(rawURL string) platformhttp.CheckFunc {
