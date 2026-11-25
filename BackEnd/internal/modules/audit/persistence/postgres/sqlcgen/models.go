@@ -11,6 +11,15 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type ActivationToken struct {
+	ID        uuid.UUID  `json:"id"`
+	UserID    uuid.UUID  `json:"user_id"`
+	TokenHash []byte     `json:"token_hash"`
+	ExpiresAt time.Time  `json:"expires_at"`
+	UsedAt    *time.Time `json:"used_at"`
+	CreatedAt time.Time  `json:"created_at"`
+}
+
 type AuditEvent struct {
 	ID            uuid.UUID   `json:"id"`
 	OccurredAt    time.Time   `json:"occurred_at"`
@@ -26,6 +35,19 @@ type AuditEvent struct {
 	AfterData     []byte      `json:"after_data"`
 }
 
+type AuthSession struct {
+	ID               uuid.UUID  `json:"id"`
+	UserID           uuid.UUID  `json:"user_id"`
+	RefreshTokenHash []byte     `json:"refresh_token_hash"`
+	FamilyID         uuid.UUID  `json:"family_id"`
+	IssuedAt         time.Time  `json:"issued_at"`
+	ExpiresAt        time.Time  `json:"expires_at"`
+	RevokedAt        *time.Time `json:"revoked_at"`
+	ReplacedBy       *uuid.UUID `json:"replaced_by"`
+	IpHash           []byte     `json:"ip_hash"`
+	UserAgentHash    []byte     `json:"user_agent_hash"`
+}
+
 type OutboxEvent struct {
 	ID            uuid.UUID   `json:"id"`
 	AggregateType string      `json:"aggregate_type"`
@@ -38,4 +60,71 @@ type OutboxEvent struct {
 	Attempts      int32       `json:"attempts"`
 	MaxAttempts   int32       `json:"max_attempts"`
 	LastError     pgtype.Text `json:"last_error"`
+}
+
+type PasswordResetToken struct {
+	ID        uuid.UUID  `json:"id"`
+	UserID    uuid.UUID  `json:"user_id"`
+	TokenHash []byte     `json:"token_hash"`
+	ExpiresAt time.Time  `json:"expires_at"`
+	UsedAt    *time.Time `json:"used_at"`
+	CreatedAt time.Time  `json:"created_at"`
+}
+
+type Permission struct {
+	ID          uuid.UUID   `json:"id"`
+	Code        string      `json:"code"`
+	Name        string      `json:"name"`
+	Description pgtype.Text `json:"description"`
+	IsSystem    bool        `json:"is_system"`
+	ArchivedAt  *time.Time  `json:"archived_at"`
+}
+
+type Role struct {
+	ID          uuid.UUID   `json:"id"`
+	Code        string      `json:"code"`
+	Name        string      `json:"name"`
+	Description pgtype.Text `json:"description"`
+	IsSystem    bool        `json:"is_system"`
+	IsRoot      bool        `json:"is_root"`
+	ArchivedAt  *time.Time  `json:"archived_at"`
+	CreatedAt   time.Time   `json:"created_at"`
+	UpdatedAt   time.Time   `json:"updated_at"`
+	Version     int32       `json:"version"`
+}
+
+type RolePermission struct {
+	RoleID       uuid.UUID  `json:"role_id"`
+	PermissionID uuid.UUID  `json:"permission_id"`
+	GrantedBy    *uuid.UUID `json:"granted_by"`
+	GrantedAt    time.Time  `json:"granted_at"`
+}
+
+type User struct {
+	ID                   uuid.UUID   `json:"id"`
+	Kind                 string      `json:"kind"`
+	Email                string      `json:"email"`
+	Username             pgtype.Text `json:"username"`
+	DisplayName          string      `json:"display_name"`
+	Status               string      `json:"status"`
+	AuthorizationVersion int32       `json:"authorization_version"`
+	LastLoginAt          *time.Time  `json:"last_login_at"`
+	CreatedAt            time.Time   `json:"created_at"`
+	UpdatedAt            time.Time   `json:"updated_at"`
+	Version              int32       `json:"version"`
+}
+
+type UserCredential struct {
+	UserID            uuid.UUID  `json:"user_id"`
+	PasswordHash      string     `json:"password_hash"`
+	PasswordChangedAt time.Time  `json:"password_changed_at"`
+	FailedLoginCount  int32      `json:"failed_login_count"`
+	LockedUntil       *time.Time `json:"locked_until"`
+}
+
+type UserRole struct {
+	UserID    uuid.UUID  `json:"user_id"`
+	RoleID    uuid.UUID  `json:"role_id"`
+	GrantedBy *uuid.UUID `json:"granted_by"`
+	GrantedAt time.Time  `json:"granted_at"`
 }
