@@ -16,9 +16,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	auditapp "github.com/trandinh0506/hotel-management/backend/internal/modules/audit/application"
 	auditpg "github.com/trandinh0506/hotel-management/backend/internal/modules/audit/persistence/postgres"
+	identityapp "github.com/trandinh0506/hotel-management/backend/internal/modules/identity/application"
+	identityhttp "github.com/trandinh0506/hotel-management/backend/internal/modules/identity/delivery/http"
+	identitypg "github.com/trandinh0506/hotel-management/backend/internal/modules/identity/persistence/postgres"
 	"github.com/trandinh0506/hotel-management/backend/internal/modules/notification"
+	"github.com/trandinh0506/hotel-management/backend/internal/platform/auth"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/clock"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/config"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/db"
@@ -94,13 +99,25 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		})
 	}
 
+	tokenManager := auth.NewTokenManager(cfg.JWTAccessSecret, cfg.JWTAccessTTL, cfg.JWTRefreshTTL, sysClock)
+	identitySvc := identityapp.NewService(txRunner, identitypg.NewRepository(pool), auditSvc, auditSvc, sysClock, idGen).
+		WithTokenManager(tokenManager)
+	authMiddleware := auth.AuthenticatorMiddleware(tokenManager, identitySvc)
+	identityHandler := identityhttp.NewHandler(identityhttp.HandlerConfig{
+		Service:      identitySvc,
+		Tokens:       tokenManager,
+		SecureCookie: cfg.AppEnv == config.EnvProduction,
+	})
+
 	router := platformhttp.NewRouter(platformhttp.RouterConfig{
 		Logger:             logger,
 		CORSAllowedOrigins: cfg.CORSAllowedOrigins,
 		BodyLimitBytes:     platformhttp.DefaultBodyLimitBytes,
 		ReadyzTimeout:      3 * time.Second,
 		ReadyzChecks:       deps,
-	}, nil)
+	}, func(api *gin.RouterGroup) {
+		identityHandler.RegisterRoutes(api, authMiddleware)
+	})
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,

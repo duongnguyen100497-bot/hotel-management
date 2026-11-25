@@ -101,7 +101,7 @@ flowchart LR
 | Trạng thái | Task | Nghiệp vụ | Phụ thuộc | Migration | Commit gợi ý |
 | :---: | :---: | --- | --- | :---: | --- |
 | [x] | **T1.1** | Schema Identity & RBAC, seed danh mục quyền chuẩn & CLI bootstrap Root Admin | `T0.4`, `T0.5` | `000003` | `feat(identity): add identity and rbac schema, permission seed and root admin bootstrap cli` |
-| [ ] | **T1.2** | Đăng ký khách hàng, đăng nhập Argon2id, JWT access & refresh cookie xoay vòng | `T1.1`, `T0.3` | — | `feat(identity): implement customer registration, argon2id login and rotating session tokens` |
+| [x] | **T1.2** | Đăng ký khách hàng, đăng nhập Argon2id, JWT access & refresh cookie xoay vòng | `T1.1`, `T0.3` | — | `feat(identity): implement customer registration, argon2id login and rotating session tokens` |
 | [ ] | **T1.3** | Quên mật khẩu & Adapter gửi email SMTP qua Outbox (Mailpit / Gmail) | `T1.2`, `T0.5` | — | `feat(notification): add smtp outbox delivery and password reset flow` |
 | [ ] | **T1.4** | Dynamic RBAC middleware, Root bypass bất biến & API quản trị Role/Permission/User-Role | `T1.2` | — | `feat(rbac): implement dynamic authorization middleware, root bypass and rbac management apis` |
 | [ ] | **T1.5** | Schema People, CRUD nhân viên & Luồng kích hoạt nhân viên qua Email SMTP | `T1.3`, `T1.4` | `000004` | `feat(people): add employee crud and atomic smtp email activation workflow` |
