@@ -130,6 +130,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		WithPayloadCipher(payloadCipher)
 	rbacSvc := rbacapp.NewService(txRunner, rbacpg.NewRepository(pool), identitySvc, auditSvc, sysClock, idGen)
 	peopleSvc := peopleapp.NewService(txRunner, peoplepg.NewRepository(pool), identitySvc, rbacSvc, auditSvc, auditSvc, sysClock, idGen)
+	identitySvc.SetCustomerRegistrationHook(peopleSvc)
 
 	authMiddleware := auth.AuthenticatorMiddleware(tokenManager, identitySvc)
 	identityHandler := identityhttp.NewHandler(identityhttp.HandlerConfig{

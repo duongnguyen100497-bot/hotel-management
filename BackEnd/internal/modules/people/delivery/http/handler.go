@@ -42,6 +42,16 @@ func (h *Handler) RegisterRoutes(api *gin.RouterGroup, authMiddleware gin.Handle
 	empGroup.PATCH("/:id", rbacapp.RequirePermission(h.rbac, "employee.update"), h.handleUpdateEmployee)
 	empGroup.POST("/:id/resend-activation", rbacapp.RequirePermission(h.rbac, "employee.update"), h.handleResendActivation)
 	empGroup.POST("/:id/deactivate", rbacapp.RequirePermission(h.rbac, "employee.deactivate"), h.handleDeactivateEmployee)
+
+	custGroup := secured.Group("/customers")
+	custGroup.GET("", rbacapp.RequirePermission(h.rbac, "customer.read"), h.handleListCustomers)
+	custGroup.POST("", rbacapp.RequirePermission(h.rbac, "customer.create"), h.handleCreateCustomer)
+	custGroup.GET("/:id", rbacapp.RequirePermission(h.rbac, "customer.read"), h.handleGetCustomer)
+	custGroup.PATCH("/:id", rbacapp.RequirePermission(h.rbac, "customer.update"), h.handleUpdateCustomer)
+	custGroup.POST("/:id/archive", rbacapp.RequirePermission(h.rbac, "customer.archive"), h.handleArchiveCustomer)
+
+	secured.GET("/me", h.handleGetMe)
+	secured.PATCH("/me", h.handleUpdateMe)
 }
 
 type createEmployeeRequest struct {
@@ -64,6 +74,38 @@ type updateEmployeeRequest struct {
 
 type deactivateEmployeeRequest struct {
 	Reason string `json:"reason,omitempty"`
+}
+
+type createCustomerRequest struct {
+	FullName        string `json:"fullName"`
+	Phone           string `json:"phone"`
+	Email           string `json:"email,omitempty"`
+	NationalityCode string `json:"nationalityCode,omitempty"`
+	GovernmentID    string `json:"governmentId,omitempty"`
+	Address         string `json:"address,omitempty"`
+}
+
+type updateCustomerRequest struct {
+	FullName        *string `json:"fullName,omitempty"`
+	Phone           *string `json:"phone,omitempty"`
+	Email           *string `json:"email,omitempty"`
+	NationalityCode *string `json:"nationalityCode,omitempty"`
+	GovernmentID    *string `json:"governmentId,omitempty"`
+	Address         *string `json:"address,omitempty"`
+	Version         int     `json:"version,omitempty"`
+}
+
+type archiveCustomerRequest struct {
+	Reason string `json:"reason,omitempty"`
+}
+
+type updateMeRequest struct {
+	DisplayName     *string `json:"displayName,omitempty"`
+	FullName        *string `json:"fullName,omitempty"`
+	Phone           *string `json:"phone,omitempty"`
+	NationalityCode *string `json:"nationalityCode,omitempty"`
+	GovernmentID    *string `json:"governmentId,omitempty"`
+	Address         *string `json:"address,omitempty"`
 }
 
 func (h *Handler) handleCreateEmployee(c *gin.Context) {
@@ -212,6 +254,195 @@ func (h *Handler) handleDeactivateEmployee(c *gin.Context) {
 		return
 	}
 	platformhttp.WriteJSON(c, http.StatusOK, emp)
+}
+
+func (h *Handler) handleCreateCustomer(c *gin.Context) {
+	actor, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		platformhttp.WriteError(c, apperror.Unauthenticated("authentication required"))
+		return
+	}
+	var req createCustomerRequest
+	if err := platformhttp.DecodeJSON(c, &req); err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	cust, err := h.svc.CreateWalkInCustomer(c.Request.Context(), actor, peopleapp.CreateWalkInCustomerParams{
+		FullName:        req.FullName,
+		Phone:           req.Phone,
+		Email:           req.Email,
+		NationalityCode: req.NationalityCode,
+		GovernmentID:    req.GovernmentID,
+		Address:         req.Address,
+	})
+	if err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	platformhttp.WriteJSON(c, http.StatusCreated, cust)
+}
+
+func (h *Handler) handleListCustomers(c *gin.Context) {
+	actor, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		platformhttp.WriteError(c, apperror.Unauthenticated("authentication required"))
+		return
+	}
+	limit, cursor, err := platformhttp.ParseCursorParams(c, 20, 100)
+	if err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	search := strings.TrimSpace(c.Query("q"))
+	if search == "" {
+		search = strings.TrimSpace(c.Query("search"))
+	}
+	items, nextCursor, err := h.svc.ListCustomers(c.Request.Context(), actor, search, cursor, limit)
+	if err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	var curPtr *string
+	if cursor != "" {
+		curPtr = &cursor
+	}
+	platformhttp.WriteJSON(c, http.StatusOK, platformhttp.PageResponse[peopleapp.Customer]{
+		Data: items,
+		Page: platformhttp.PageInfo{
+			Limit:      limit,
+			Cursor:     curPtr,
+			NextCursor: nextCursor,
+		},
+	})
+}
+
+func (h *Handler) handleGetCustomer(c *gin.Context) {
+	actor, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		platformhttp.WriteError(c, apperror.Unauthenticated("authentication required"))
+		return
+	}
+	custID, err := parseUUIDParam(c, "id")
+	if err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	cust, err := h.svc.GetCustomer(c.Request.Context(), actor, custID)
+	if err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	platformhttp.WriteJSON(c, http.StatusOK, cust)
+}
+
+func (h *Handler) handleUpdateCustomer(c *gin.Context) {
+	actor, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		platformhttp.WriteError(c, apperror.Unauthenticated("authentication required"))
+		return
+	}
+	custID, err := parseUUIDParam(c, "id")
+	if err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	var req updateCustomerRequest
+	if err := platformhttp.DecodeJSON(c, &req); err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	version := req.Version
+	if version == 0 {
+		if ifMatch := platformhttp.IfMatch(c); ifMatch != "" {
+			if parsed, err := strconv.Atoi(ifMatch); err == nil {
+				version = parsed
+			}
+		}
+	}
+	cust, err := h.svc.UpdateCustomer(c.Request.Context(), actor, peopleapp.UpdateCustomerParams{
+		ID:              custID,
+		FullName:        req.FullName,
+		Phone:           req.Phone,
+		Email:           req.Email,
+		NationalityCode: req.NationalityCode,
+		GovernmentID:    req.GovernmentID,
+		Address:         req.Address,
+		ExpectedVersion: version,
+	})
+	if err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	platformhttp.WriteJSON(c, http.StatusOK, cust)
+}
+
+func (h *Handler) handleArchiveCustomer(c *gin.Context) {
+	actor, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		platformhttp.WriteError(c, apperror.Unauthenticated("authentication required"))
+		return
+	}
+	custID, err := parseUUIDParam(c, "id")
+	if err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	var req archiveCustomerRequest
+	if c.Request.ContentLength > 0 {
+		if err := platformhttp.DecodeJSON(c, &req); err != nil {
+			platformhttp.WriteError(c, err)
+			return
+		}
+	}
+	cust, err := h.svc.ArchiveCustomer(c.Request.Context(), actor, custID, strings.TrimSpace(req.Reason))
+	if err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	platformhttp.WriteJSON(c, http.StatusOK, cust)
+}
+
+func (h *Handler) handleGetMe(c *gin.Context) {
+	actor, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		platformhttp.WriteError(c, apperror.Unauthenticated("authentication required"))
+		return
+	}
+	profile, err := h.svc.GetMe(c.Request.Context(), actor)
+	if err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	platformhttp.WriteJSON(c, http.StatusOK, profile)
+}
+
+func (h *Handler) handleUpdateMe(c *gin.Context) {
+	actor, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		platformhttp.WriteError(c, apperror.Unauthenticated("authentication required"))
+		return
+	}
+	var req updateMeRequest
+	if err := platformhttp.DecodeJSON(c, &req); err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	displayName := req.DisplayName
+	if displayName == nil && req.FullName != nil {
+		displayName = req.FullName
+	}
+	profile, err := h.svc.UpdateMe(c.Request.Context(), actor, peopleapp.UpdateMeParams{
+		DisplayName:     displayName,
+		Phone:           req.Phone,
+		NationalityCode: req.NationalityCode,
+		GovernmentID:    req.GovernmentID,
+		Address:         req.Address,
+	})
+	if err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	platformhttp.WriteJSON(c, http.StatusOK, profile)
 }
 
 func parseUUIDParam(c *gin.Context, param string) (uuid.UUID, error) {

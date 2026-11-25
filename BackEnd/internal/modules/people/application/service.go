@@ -2,7 +2,10 @@ package application
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -109,20 +112,37 @@ type employeeActivationOutboxPayload struct {
 	ExpiresAt      time.Time `json:"expiresAt"`
 }
 
-// Service implements employee and customer lifecycle use cases.
-type Service struct {
-	txRunner db.TxRunner
-	repo     Repository
-	identity IdentityPort
-	rbac     RBACPort
-	audit    auditapp.Recorder
-	outbox   auditapp.OutboxEnqueuer
-	clk      clock.Clock
-	ids      id.Generator
+// CustomerArchiveChecker is an optional hook (wired in Phase 3) to block archiving a customer
+// who currently has active bookings or open stays.
+type CustomerArchiveChecker interface {
+	EnsureCustomerCanBeArchived(ctx context.Context, customerID uuid.UUID) error
 }
 
-// Compile-time check that Service implements CustomerReader.
-var _ CustomerReader = (*Service)(nil)
+// WalletProvisionerHook is an optional hook (wired in Phase 4 T4.1) invoked inside the same
+// transaction when an online customer profile is created for a user.
+type WalletProvisionerHook interface {
+	EnsureCustomerWallet(ctx context.Context, customerID, userID uuid.UUID) error
+}
+
+// Service implements employee and customer lifecycle use cases.
+type Service struct {
+	txRunner       db.TxRunner
+	repo           Repository
+	identity       IdentityPort
+	rbac           RBACPort
+	audit          auditapp.Recorder
+	outbox         auditapp.OutboxEnqueuer
+	clk            clock.Clock
+	ids            id.Generator
+	archiveChecker CustomerArchiveChecker
+	walletHook     WalletProvisionerHook
+}
+
+// Compile-time checks.
+var (
+	_ CustomerReader                       = (*Service)(nil)
+	_ identityapp.CustomerRegistrationHook = (*Service)(nil)
+)
 
 // NewService constructs a People application service.
 func NewService(
@@ -537,4 +557,495 @@ func (s *Service) GetCustomerByID(ctx context.Context, id uuid.UUID) (domain.Cus
 // GetCustomerByUserID implements CustomerReader.
 func (s *Service) GetCustomerByUserID(ctx context.Context, userID uuid.UUID) (domain.Customer, error) {
 	return s.repo.GetCustomerByUserID(ctx, userID)
+}
+
+// SetCustomerArchiveChecker wires the Phase 3 active-booking check before archiving a customer.
+func (s *Service) SetCustomerArchiveChecker(checker CustomerArchiveChecker) {
+	s.archiveChecker = checker
+}
+
+// SetWalletProvisionerHook wires the Phase 4 wallet creation hook on online customer registration.
+func (s *Service) SetWalletProvisionerHook(hook WalletProvisionerHook) {
+	s.walletHook = hook
+}
+
+// OnCustomerRegistered implements identityapp.CustomerRegistrationHook, atomically creating an online
+// customer profile (and triggering WalletProvisionerHook in Phase 4) within the registration transaction.
+func (s *Service) OnCustomerRegistered(ctx context.Context, user identityapp.User, phone string) error {
+	_, err := s.CreateCustomerForUser(ctx, user, phone)
+	return err
+}
+
+// CreateCustomerForUser creates an online customer record bound to user.ID inside the active transaction.
+func (s *Service) CreateCustomerForUser(ctx context.Context, user identityapp.User, phone string) (domain.Customer, error) {
+	cleanPhone := strings.TrimSpace(phone)
+	if cleanPhone == "" {
+		cleanPhone = "N/A"
+	}
+	now := s.clk.Now()
+	uid := user.ID
+	cust, err := s.repo.CreateCustomer(ctx, domain.Customer{
+		ID:        s.ids.NewUUID(),
+		UserID:    &uid,
+		FullName:  user.DisplayName,
+		Phone:     cleanPhone,
+		Email:     user.Email,
+		Source:    domain.CustomerSourceOnline,
+		CreatedAt: now,
+	})
+	if err != nil {
+		return domain.Customer{}, err
+	}
+	if s.walletHook != nil {
+		if err := s.walletHook.EnsureCustomerWallet(ctx, cust.ID, user.ID); err != nil {
+			return domain.Customer{}, err
+		}
+	}
+	return cust, nil
+}
+
+// CreateWalkInCustomerParams defines inputs for front-desk staff creating a walk-in customer (user_id = NULL).
+type CreateWalkInCustomerParams struct {
+	FullName        string
+	Phone           string
+	Email           string
+	NationalityCode string
+	GovernmentID    string
+	Address         string
+}
+
+// UpdateCustomerParams defines inputs for staff updating a customer profile with optimistic locking (version).
+type UpdateCustomerParams struct {
+	ID              uuid.UUID
+	FullName        *string
+	Phone           *string
+	Email           *string
+	NationalityCode *string
+	GovernmentID    *string
+	Address         *string
+	ExpectedVersion int
+}
+
+// CreateWalkInCustomer creates a walk-in customer profile (user_id = NULL, source = 'walk_in') and records a redacted audit entry.
+func (s *Service) CreateWalkInCustomer(ctx context.Context, actor auth.Principal, params CreateWalkInCustomerParams) (domain.Customer, error) {
+	if err := s.rbac.Authorize(ctx, actor, "customer.create"); err != nil {
+		return domain.Customer{}, err
+	}
+	fullName := strings.TrimSpace(params.FullName)
+	phone := strings.TrimSpace(params.Phone)
+	var fields []apperror.FieldError
+	if fullName == "" {
+		fields = append(fields, apperror.FieldError{Field: "fullName", Message: "fullName is required"})
+	}
+	if phone == "" {
+		fields = append(fields, apperror.FieldError{Field: "phone", Message: "phone is required"})
+	}
+	if len(fields) > 0 {
+		return domain.Customer{}, apperror.Validation("invalid customer payload", fields...)
+	}
+
+	now := s.clk.Now()
+	var created domain.Customer
+	err := s.txRunner.WithinTx(ctx, func(txCtx context.Context) error {
+		c, err := s.repo.CreateCustomer(txCtx, domain.Customer{
+			ID:              s.ids.NewUUID(),
+			UserID:          nil,
+			FullName:        fullName,
+			Phone:           phone,
+			Email:           strings.ToLower(strings.TrimSpace(params.Email)),
+			NationalityCode: strings.ToUpper(strings.TrimSpace(params.NationalityCode)),
+			GovernmentID:    strings.TrimSpace(params.GovernmentID),
+			Address:         strings.TrimSpace(params.Address),
+			Source:          domain.CustomerSourceWalkIn,
+			CreatedAt:       now,
+		})
+		if err != nil {
+			return err
+		}
+		if s.audit != nil {
+			if err := s.audit.Record(txCtx, auditapp.AuditEntry{
+				ActorUserID:   &actor.UserID,
+				Action:        "people.customer_created",
+				ResourceType:  "customer",
+				ResourceID:    &c.ID,
+				RequestID:     platformhttp.RequestIDUUIDFromContext(txCtx),
+				CorrelationID: platformhttp.CorrelationIDUUIDFromContext(txCtx),
+				AfterData: map[string]any{
+					"full_name":            c.FullName,
+					"phone":                c.Phone,
+					"email":                c.Email,
+					"source":               c.Source,
+					"government_id_masked": domain.MaskGovernmentID(c.GovernmentID),
+				},
+			}); err != nil {
+				return err
+			}
+		}
+		created = c
+		return nil
+	})
+	return created, err
+}
+
+// ListCustomers returns cursor-paginated active customers with government_id masked in list items.
+func (s *Service) ListCustomers(ctx context.Context, actor auth.Principal, search, rawCursor string, limit int) ([]domain.Customer, *string, error) {
+	if err := s.rbac.Authorize(ctx, actor, "customer.read"); err != nil {
+		return nil, nil, err
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	cursor, err := decodeCustomerCursor(rawCursor)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	rows, err := s.repo.ListCustomers(ctx, search, cursor, limit+1)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var nextCursor *string
+	if len(rows) > limit {
+		last := rows[limit-1]
+		encoded := encodeCustomerCursor(last.CreatedAt, last.ID)
+		nextCursor = &encoded
+		rows = rows[:limit]
+	}
+
+	for i := range rows {
+		rows[i].GovernmentID = domain.MaskGovernmentID(rows[i].GovernmentID)
+	}
+	return rows, nextCursor, nil
+}
+
+// GetCustomer retrieves full customer details for authorized staff.
+func (s *Service) GetCustomer(ctx context.Context, actor auth.Principal, customerID uuid.UUID) (domain.Customer, error) {
+	if err := s.rbac.Authorize(ctx, actor, "customer.read"); err != nil {
+		return domain.Customer{}, err
+	}
+	return s.repo.GetCustomerByID(ctx, customerID)
+}
+
+// UpdateCustomer updates a customer profile with optimistic locking (version) and never logs raw government_id.
+func (s *Service) UpdateCustomer(ctx context.Context, actor auth.Principal, params UpdateCustomerParams) (domain.Customer, error) {
+	if err := s.rbac.Authorize(ctx, actor, "customer.update"); err != nil {
+		return domain.Customer{}, err
+	}
+	if params.ExpectedVersion < 1 {
+		return domain.Customer{}, apperror.Validation("version is required for optimistic locking", apperror.FieldError{
+			Field:   "version",
+			Message: "must be >= 1",
+		})
+	}
+
+	now := s.clk.Now()
+	var updated domain.Customer
+	err := s.txRunner.WithinTx(ctx, func(txCtx context.Context) error {
+		before, err := s.repo.GetCustomerByIDForUpdate(txCtx, params.ID)
+		if err != nil {
+			return err
+		}
+		target := before
+		if params.FullName != nil {
+			if trimmed := strings.TrimSpace(*params.FullName); trimmed != "" {
+				target.FullName = trimmed
+			}
+		}
+		if params.Phone != nil {
+			if trimmed := strings.TrimSpace(*params.Phone); trimmed != "" {
+				target.Phone = trimmed
+			}
+		}
+		if params.Email != nil {
+			target.Email = strings.ToLower(strings.TrimSpace(*params.Email))
+		}
+		if params.NationalityCode != nil {
+			target.NationalityCode = strings.ToUpper(strings.TrimSpace(*params.NationalityCode))
+		}
+		if params.GovernmentID != nil {
+			target.GovernmentID = strings.TrimSpace(*params.GovernmentID)
+		}
+		if params.Address != nil {
+			target.Address = strings.TrimSpace(*params.Address)
+		}
+
+		after, err := s.repo.UpdateCustomerOptimistic(txCtx, target, params.ExpectedVersion, now)
+		if err != nil {
+			return err
+		}
+		if after.UserID != nil && after.FullName != before.FullName {
+			if _, err := s.identity.UpdateDisplayName(txCtx, *after.UserID, after.FullName); err != nil {
+				return err
+			}
+		}
+		if s.audit != nil {
+			if err := s.audit.Record(txCtx, auditapp.AuditEntry{
+				ActorUserID:   &actor.UserID,
+				Action:        "people.customer_updated",
+				ResourceType:  "customer",
+				ResourceID:    &after.ID,
+				RequestID:     platformhttp.RequestIDUUIDFromContext(txCtx),
+				CorrelationID: platformhttp.CorrelationIDUUIDFromContext(txCtx),
+				BeforeData: map[string]any{
+					"full_name":            before.FullName,
+					"phone":                before.Phone,
+					"email":                before.Email,
+					"government_id_masked": domain.MaskGovernmentID(before.GovernmentID),
+					"version":              before.Version,
+				},
+				AfterData: map[string]any{
+					"full_name":            after.FullName,
+					"phone":                after.Phone,
+					"email":                after.Email,
+					"government_id_masked": domain.MaskGovernmentID(after.GovernmentID),
+					"version":              after.Version,
+				},
+			}); err != nil {
+				return err
+			}
+		}
+		updated = after
+		return nil
+	})
+	return updated, err
+}
+
+// ArchiveCustomer soft-archives a customer record (checking CustomerArchiveChecker if wired).
+func (s *Service) ArchiveCustomer(ctx context.Context, actor auth.Principal, customerID uuid.UUID, reason string) (domain.Customer, error) {
+	if err := s.rbac.Authorize(ctx, actor, "customer.archive"); err != nil {
+		return domain.Customer{}, err
+	}
+	now := s.clk.Now()
+	var archived domain.Customer
+	err := s.txRunner.WithinTx(ctx, func(txCtx context.Context) error {
+		before, err := s.repo.GetCustomerByIDForUpdate(txCtx, customerID)
+		if err != nil {
+			return err
+		}
+		if s.archiveChecker != nil {
+			if err := s.archiveChecker.EnsureCustomerCanBeArchived(txCtx, before.ID); err != nil {
+				return err
+			}
+		}
+		after, err := s.repo.ArchiveCustomer(txCtx, before.ID, now)
+		if err != nil {
+			return err
+		}
+		if s.audit != nil {
+			if err := s.audit.Record(txCtx, auditapp.AuditEntry{
+				ActorUserID:   &actor.UserID,
+				Action:        "people.customer_archived",
+				ResourceType:  "customer",
+				ResourceID:    &after.ID,
+				RequestID:     platformhttp.RequestIDUUIDFromContext(txCtx),
+				CorrelationID: platformhttp.CorrelationIDUUIDFromContext(txCtx),
+				Reason:        strings.TrimSpace(reason),
+				BeforeData: map[string]any{
+					"full_name": before.FullName,
+				},
+			}); err != nil {
+				return err
+			}
+		}
+		archived = after
+		return nil
+	})
+	return archived, err
+}
+
+// MeProfile represents the authenticated caller's self-service profile across user, customer, or employee records.
+type MeProfile struct {
+	User     identityapp.User `json:"user"`
+	Customer *domain.Customer `json:"customer,omitempty"`
+	Employee *domain.Employee `json:"employee,omitempty"`
+	Roles    []string         `json:"roles,omitempty"`
+}
+
+// UpdateMeParams defines mutable fields for PATCH /api/v1/me (login email is immutable).
+type UpdateMeParams struct {
+	DisplayName     *string
+	Phone           *string
+	NationalityCode *string
+	GovernmentID    *string
+	Address         *string
+}
+
+// GetMe returns the caller's own account and profile (contextual ownership strictly bound to principal.UserID).
+func (s *Service) GetMe(ctx context.Context, actor auth.Principal) (MeProfile, error) {
+	user, err := s.identity.GetUserByID(ctx, actor.UserID)
+	if err != nil {
+		return MeProfile{}, err
+	}
+	out := MeProfile{User: user}
+
+	if user.Kind == identityapp.UserKindCustomer {
+		if cust, err := s.repo.GetCustomerByUserID(ctx, user.ID); err == nil {
+			out.Customer = &cust
+		}
+	} else {
+		if emp, err := s.repo.GetEmployeeByUserID(ctx, user.ID); err == nil {
+			_ = s.enrichEmployee(ctx, &emp)
+			out.Employee = &emp
+		}
+		if s.rbac != nil {
+			if roles, err := s.rbac.ListUserRoles(ctx, user.ID); err == nil {
+				codes := make([]string, 0, len(roles))
+				for _, r := range roles {
+					codes = append(codes, r.Code)
+				}
+				out.Roles = codes
+			}
+		}
+	}
+	return out, nil
+}
+
+// UpdateMe updates the caller's own profile (strictly bound to actor.UserID; login email is immutable).
+func (s *Service) UpdateMe(ctx context.Context, actor auth.Principal, params UpdateMeParams) (MeProfile, error) {
+	now := s.clk.Now()
+	err := s.txRunner.WithinTx(ctx, func(txCtx context.Context) error {
+		user, err := s.identity.GetUserByID(txCtx, actor.UserID)
+		if err != nil {
+			return err
+		}
+
+		newDisplayName := user.DisplayName
+		if params.DisplayName != nil {
+			trimmed := strings.TrimSpace(*params.DisplayName)
+			if trimmed == "" {
+				return apperror.Validation("displayName must not be empty", apperror.FieldError{
+					Field:   "displayName",
+					Message: "must not be empty",
+				})
+			}
+			newDisplayName = trimmed
+			if _, err := s.identity.UpdateDisplayName(txCtx, user.ID, newDisplayName); err != nil {
+				return err
+			}
+		}
+
+		if user.Kind == identityapp.UserKindCustomer {
+			cust, err := s.repo.GetCustomerByUserID(txCtx, user.ID)
+			if err != nil {
+				uid := user.ID
+				phone := "N/A"
+				if params.Phone != nil && strings.TrimSpace(*params.Phone) != "" {
+					phone = strings.TrimSpace(*params.Phone)
+				}
+				_, createErr := s.repo.CreateCustomer(txCtx, domain.Customer{
+					ID:              s.ids.NewUUID(),
+					UserID:          &uid,
+					FullName:        newDisplayName,
+					Phone:           phone,
+					Email:           user.Email,
+					NationalityCode: derefTrimUpper(params.NationalityCode),
+					GovernmentID:    derefTrim(params.GovernmentID),
+					Address:         derefTrim(params.Address),
+					Source:          domain.CustomerSourceOnline,
+					CreatedAt:       now,
+				})
+				return createErr
+			}
+
+			locked, err := s.repo.GetCustomerByIDForUpdate(txCtx, cust.ID)
+			if err != nil {
+				return err
+			}
+			locked.FullName = newDisplayName
+			if params.Phone != nil && strings.TrimSpace(*params.Phone) != "" {
+				locked.Phone = strings.TrimSpace(*params.Phone)
+			}
+			if params.NationalityCode != nil {
+				locked.NationalityCode = strings.ToUpper(strings.TrimSpace(*params.NationalityCode))
+			}
+			if params.GovernmentID != nil {
+				locked.GovernmentID = strings.TrimSpace(*params.GovernmentID)
+			}
+			if params.Address != nil {
+				locked.Address = strings.TrimSpace(*params.Address)
+			}
+			if _, err := s.repo.UpdateCustomerOptimistic(txCtx, locked, locked.Version, now); err != nil {
+				return err
+			}
+		} else {
+			if emp, err := s.repo.GetEmployeeByUserID(txCtx, user.ID); err == nil {
+				locked, err := s.repo.GetEmployeeByIDForUpdate(txCtx, emp.ID)
+				if err != nil {
+					return err
+				}
+				phone := locked.Phone
+				if params.Phone != nil && strings.TrimSpace(*params.Phone) != "" {
+					phone = strings.TrimSpace(*params.Phone)
+				}
+				if _, err := s.repo.UpdateEmployeeOptimistic(txCtx, locked.ID, newDisplayName, phone, locked.PositionTitle, locked.Version, now); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return MeProfile{}, err
+	}
+	return s.GetMe(ctx, actor)
+}
+
+func derefTrim(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return strings.TrimSpace(*p)
+}
+
+func derefTrimUpper(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return strings.ToUpper(strings.TrimSpace(*p))
+}
+
+func encodeCustomerCursor(createdAt time.Time, id uuid.UUID) string {
+	raw := fmt.Sprintf("%d|%s", createdAt.UTC().UnixNano(), id.String())
+	return base64.RawURLEncoding.EncodeToString([]byte(raw))
+}
+
+func decodeCustomerCursor(encoded string) (peoplepg.CustomerListCursor, error) {
+	trimmed := strings.TrimSpace(encoded)
+	if trimmed == "" {
+		return peoplepg.CustomerListCursor{HasCursor: false}, nil
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(trimmed)
+	if err != nil {
+		return peoplepg.CustomerListCursor{}, apperror.Validation("invalid cursor", apperror.FieldError{
+			Field:   "cursor",
+			Message: "malformed pagination cursor",
+		})
+	}
+	parts := strings.SplitN(string(decoded), "|", 2)
+	if len(parts) != 2 {
+		return peoplepg.CustomerListCursor{}, apperror.Validation("invalid cursor", apperror.FieldError{
+			Field:   "cursor",
+			Message: "malformed pagination cursor",
+		})
+	}
+	nanos, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return peoplepg.CustomerListCursor{}, apperror.Validation("invalid cursor", apperror.FieldError{
+			Field:   "cursor",
+			Message: "malformed pagination cursor timestamp",
+		})
+	}
+	id, err := uuid.Parse(parts[1])
+	if err != nil || id == uuid.Nil {
+		return peoplepg.CustomerListCursor{}, apperror.Validation("invalid cursor", apperror.FieldError{
+			Field:   "cursor",
+			Message: "malformed pagination cursor id",
+		})
+	}
+	return peoplepg.CustomerListCursor{
+		HasCursor: true,
+		CreatedAt: time.Unix(0, nanos).UTC(),
+		ID:        id,
+	}, nil
 }

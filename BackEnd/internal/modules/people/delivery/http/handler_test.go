@@ -264,3 +264,227 @@ func TestEmployeeCRUD_AtomicEmailActivationAndDeactivationFlow(t *testing.T) {
 		t.Fatalf("expected deactivated employee login to fail with 401, got %d", postDeactLoginCode)
 	}
 }
+
+func TestCustomerManagement_WalkInAndSelfServiceMeOwnership(t *testing.T) {
+	pg := testutil.StartPostgres(t)
+	ctx := context.Background()
+
+	now := time.Date(2026, 11, 25, 18, 0, 0, 0, time.UTC)
+	clk := clock.NewFixed(now)
+	ids := id.NewUUIDGenerator()
+
+	cipher, _ := auth.NewPayloadCipher("refresh-secret-for-aes-gcm-outbox-encryption")
+	auditSvc := auditapp.NewService(auditpg.NewRepository(pg.Pool), clk, ids)
+	identityRepo := identitypg.NewRepository(pg.Pool)
+	tokens := auth.NewTokenManager("test-access-secret-32-bytes-minimum!!", 15*time.Minute, 7*24*time.Hour, clk)
+	identitySvc := identityapp.NewService(pg.TxRunner, identityRepo, auditSvc, auditSvc, clk, ids).
+		WithTokenManager(tokens).
+		WithPayloadCipher(cipher)
+	rbacRepo := rbacpg.NewRepository(pg.Pool)
+	rbacSvc := rbacapp.NewService(pg.TxRunner, rbacRepo, identitySvc, auditSvc, clk, ids)
+	peopleRepo := peoplepg.NewRepository(pg.Pool)
+	peopleSvc := peopleapp.NewService(pg.TxRunner, peopleRepo, identitySvc, rbacSvc, auditSvc, auditSvc, clk, ids)
+
+	// Wire customer registration hook so POST /api/v1/auth/register creates both users and customers atomically.
+	identitySvc.SetCustomerRegistrationHook(peopleSvc)
+
+	if _, err := rbacSvc.BootstrapRootAdmin(ctx, rbacapp.BootstrapAdminParams{
+		Email:       "root@hotel.local",
+		Password:    "RootPass123!",
+		DisplayName: "Root Admin",
+	}); err != nil {
+		t.Fatalf("bootstrap root admin: %v", err)
+	}
+
+	authMW := auth.AuthenticatorMiddleware(tokens, identitySvc)
+	idHandler := identityhttp.NewHandler(identityhttp.HandlerConfig{
+		Service:      identitySvc,
+		Tokens:       tokens,
+		SecureCookie: false,
+	})
+	peopleHandler := peoplehttp.NewHandler(peopleSvc, rbacSvc)
+
+	router := platformhttp.NewRouter(platformhttp.RouterConfig{}, func(api *gin.RouterGroup) {
+		idHandler.RegisterRoutes(api, authMW)
+		peopleHandler.RegisterRoutes(api, authMW)
+	})
+
+	doJSON := func(method, path string, body any, bearer string) *httptest.ResponseRecorder {
+		var buf bytes.Buffer
+		if body != nil {
+			_ = json.NewEncoder(&buf).Encode(body)
+		}
+		req := httptest.NewRequest(method, path, &buf)
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+
+	loginAs := func(email, password string) string {
+		res := doJSON(http.MethodPost, "/api/v1/auth/login", map[string]any{
+			"email":    email,
+			"password": password,
+		}, "")
+		if res.Code != http.StatusOK {
+			t.Fatalf("login %s failed (%d): %s", email, res.Code, res.Body.String())
+		}
+		var payload struct {
+			AccessToken string `json:"accessToken"`
+		}
+		_ = json.Unmarshal(res.Body.Bytes(), &payload)
+		return payload.AccessToken
+	}
+
+	rootToken := loginAs("root@hotel.local", "RootPass123!")
+
+	// 1. Customer A registers -> creates both users and customers (source='online').
+	regARes := doJSON(http.MethodPost, "/api/v1/auth/register", map[string]any{
+		"email":       "customer.a@example.com",
+		"password":    "CustomerAPass123",
+		"displayName": "Customer A",
+		"phone":       "0901111111",
+	}, "")
+	if regARes.Code != http.StatusCreated {
+		t.Fatalf("register customer A failed (%d): %s", regARes.Code, regARes.Body.String())
+	}
+	var regAPayload struct {
+		AccessToken string           `json:"accessToken"`
+		User        identityapp.User `json:"user"`
+	}
+	_ = json.Unmarshal(regARes.Body.Bytes(), &regAPayload)
+	tokenA1 := regAPayload.AccessToken
+
+	// Verify /api/v1/me returns Customer A's user and online customer profile.
+	meARes := doJSON(http.MethodGet, "/api/v1/me", nil, tokenA1)
+	if meARes.Code != http.StatusOK {
+		t.Fatalf("get /me failed (%d): %s", meARes.Code, meARes.Body.String())
+	}
+	var meProfile peopleapp.MeProfile
+	_ = json.Unmarshal(meARes.Body.Bytes(), &meProfile)
+	if meProfile.Customer == nil || meProfile.Customer.Source != peopleapp.CustomerSourceOnline || meProfile.Customer.Phone != "0901111111" {
+		t.Fatalf("expected online customer profile on /me, got %+v", meProfile.Customer)
+	}
+
+	// Update /api/v1/me (phone, address, nationalityCode, governmentId).
+	patchMeRes := doJSON(http.MethodPatch, "/api/v1/me", map[string]any{
+		"displayName":     "Customer A Updated",
+		"phone":           "0909999999",
+		"nationalityCode": "vn",
+		"governmentId":    "079123456789",
+		"address":         "123 Le Loi, HCMC",
+	}, tokenA1)
+	if patchMeRes.Code != http.StatusOK {
+		t.Fatalf("patch /me failed (%d): %s", patchMeRes.Code, patchMeRes.Body.String())
+	}
+
+	// 2. Customer B registers.
+	regBRes := doJSON(http.MethodPost, "/api/v1/auth/register", map[string]any{
+		"email":       "customer.b@example.com",
+		"password":    "CustomerBPass123",
+		"displayName": "Customer B",
+		"phone":       "0902222222",
+	}, "")
+	var regBPayload struct {
+		AccessToken string `json:"accessToken"`
+	}
+	_ = json.Unmarshal(regBRes.Body.Bytes(), &regBPayload)
+	tokenB := regBPayload.AccessToken
+
+	// 3. Negative ownership guard:
+	//    - Customer A cannot access staff /api/v1/customers endpoint (403 Forbidden).
+	//    - Customer A cannot delete Customer B's session via /api/v1/me/sessions/{id} (404 Not Found).
+	custAccessStaff := doJSON(http.MethodGet, "/api/v1/customers", nil, tokenA1)
+	if custAccessStaff.Code != http.StatusForbidden {
+		t.Fatalf("expected customer accessing /api/v1/customers to get 403, got %d", custAccessStaff.Code)
+	}
+
+	sessBRes := doJSON(http.MethodGet, "/api/v1/me/sessions", nil, tokenB)
+	var sessBPayload struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(sessBRes.Body.Bytes(), &sessBPayload)
+	if len(sessBPayload.Data) != 1 {
+		t.Fatalf("expected 1 session for Customer B, got %d", len(sessBPayload.Data))
+	}
+	sessionBID := sessBPayload.Data[0].ID
+
+	crossDeleteRes := doJSON(http.MethodDelete, "/api/v1/me/sessions/"+sessionBID, nil, tokenA1)
+	if crossDeleteRes.Code != http.StatusNotFound {
+		t.Fatalf("expected Customer A deleting Customer B's session to return 404, got %d", crossDeleteRes.Code)
+	}
+
+	// 4. Customer A opens a second login session (tokenA2), then changes password from tokenA2 via POST /api/v1/me/password
+	//    -> tokenA1 (other session) is revoked immediately, while tokenA2 stays valid!
+	tokenA2 := loginAs("customer.a@example.com", "CustomerAPass123")
+	changePwRes := doJSON(http.MethodPost, "/api/v1/me/password", map[string]any{
+		"currentPassword": "CustomerAPass123",
+		"newPassword":     "CustomerANewPass789",
+	}, tokenA2)
+	if changePwRes.Code != http.StatusOK {
+		t.Fatalf("change own password failed (%d): %s", changePwRes.Code, changePwRes.Body.String())
+	}
+
+	meWithOldSession := doJSON(http.MethodGet, "/api/v1/me", nil, tokenA1)
+	if meWithOldSession.Code != http.StatusUnauthorized {
+		t.Fatalf("expected other session tokenA1 to be revoked after /me/password, got %d", meWithOldSession.Code)
+	}
+	meWithCurrentSession := doJSON(http.MethodGet, "/api/v1/me", nil, tokenA2)
+	if meWithCurrentSession.Code != http.StatusOK {
+		t.Fatalf("expected current session tokenA2 to remain valid after /me/password, got %d", meWithCurrentSession.Code)
+	}
+
+	// 5. Staff creates a walk-in customer (user_id = NULL, source = 'walk_in') -> 201 Created.
+	rawGovID := "001099887766"
+	walkInRes := doJSON(http.MethodPost, "/api/v1/customers", map[string]any{
+		"fullName":        "Walk In Guest",
+		"phone":           "0933445566",
+		"nationalityCode": "VN",
+		"governmentId":    rawGovID,
+		"address":         "456 Nguyen Hue",
+	}, rootToken)
+	if walkInRes.Code != http.StatusCreated {
+		t.Fatalf("create walk-in customer failed (%d): %s", walkInRes.Code, walkInRes.Body.String())
+	}
+	var walkInCust peopleapp.Customer
+	_ = json.Unmarshal(walkInRes.Body.Bytes(), &walkInCust)
+	if walkInCust.UserID != nil || walkInCust.Source != peopleapp.CustomerSourceWalkIn {
+		t.Fatalf("expected walk-in customer with nil UserID, got %+v", walkInCust)
+	}
+
+	// 6. Staff lists customers with cursor pagination -> governmentId is masked in list items,
+	//    and audit_events never contains the raw governmentId!
+	listRes := doJSON(http.MethodGet, "/api/v1/customers?q=Walk&limit=10", nil, rootToken)
+	if listRes.Code != http.StatusOK {
+		t.Fatalf("list customers failed (%d): %s", listRes.Code, listRes.Body.String())
+	}
+	if strings.Contains(listRes.Body.String(), rawGovID) {
+		t.Fatalf("expected raw governmentId to be masked in customer list response: %s", listRes.Body.String())
+	}
+	if !strings.Contains(listRes.Body.String(), "****7766") {
+		t.Fatalf("expected masked governmentId ****7766 in list response: %s", listRes.Body.String())
+	}
+
+	var rawGovAuditCount int
+	if err := pg.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM audit_events WHERE after_data::text LIKE '%' || $1 || '%' OR before_data::text LIKE '%' || $1 || '%'`, rawGovID).Scan(&rawGovAuditCount); err != nil {
+		t.Fatalf("check audit for raw government_id: %v", err)
+	}
+	if rawGovAuditCount != 0 {
+		t.Fatalf("security violation: raw government_id must never be recorded in audit_events")
+	}
+
+	// 7. Archive walk-in customer -> 200 OK.
+	archRes := doJSON(http.MethodPost, "/api/v1/customers/"+walkInCust.ID.String()+"/archive", map[string]any{
+		"reason": "duplicate walk-in profile",
+	}, rootToken)
+	if archRes.Code != http.StatusOK {
+		t.Fatalf("archive customer failed (%d): %s", archRes.Code, archRes.Body.String())
+	}
+}

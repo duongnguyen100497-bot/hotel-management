@@ -330,6 +330,168 @@ paths:
         "409":
           description: Cannot deactivate last active root admin
 
+  /api/v1/customers:
+    get:
+      summary: List customers with search and cursor pagination (masks governmentId)
+      operationId: listCustomers
+      tags:
+        - People
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: q
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated customer list
+    post:
+      summary: Create a walk-in customer profile (user_id = NULL)
+      operationId: createWalkInCustomer
+      tags:
+        - People
+      security:
+        - BearerAuth: []
+      responses:
+        "201":
+          description: Walk-in customer created
+
+  /api/v1/customers/{id}:
+    get:
+      summary: Get customer profile by ID
+      operationId: getCustomer
+      tags:
+        - People
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Customer details
+    patch:
+      summary: Update customer profile with optimistic locking (version)
+      operationId: updateCustomer
+      tags:
+        - People
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Customer updated
+        "409":
+          description: Version or duplicate governmentId conflict
+
+  /api/v1/customers/{id}/archive:
+    post:
+      summary: Soft-archive a customer profile
+      operationId: archiveCustomer
+      tags:
+        - People
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Customer archived
+
+  /api/v1/me:
+    get:
+      summary: Get authenticated caller's own user and customer/employee profile
+      operationId: getMe
+      tags:
+        - SelfService
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Self-service profile
+    patch:
+      summary: Update authenticated caller's own profile (login email is immutable)
+      operationId: updateMe
+      tags:
+        - SelfService
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Updated self-service profile
+
+  /api/v1/me/password:
+    post:
+      summary: Verify current password, update Argon2id hash, and revoke other sessions
+      operationId: changeOwnPassword
+      tags:
+        - SelfService
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Password changed
+
+  /api/v1/me/sessions:
+    get:
+      summary: List caller's own active login sessions
+      operationId: listOwnSessions
+      tags:
+        - SelfService
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Active sessions list
+
+  /api/v1/me/sessions/{id}:
+    delete:
+      summary: Revoke one of the caller's own sessions
+      operationId: revokeOwnSession
+      tags:
+        - SelfService
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Session revoked
+        "404":
+          description: Session not found or owned by another user
+
   /api/v1/permissions:
     get:
       summary: List all active permissions

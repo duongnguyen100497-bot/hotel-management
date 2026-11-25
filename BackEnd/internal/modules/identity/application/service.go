@@ -945,6 +945,105 @@ func (s *Service) UpdateDisplayName(ctx context.Context, userID uuid.UUID, displ
 	return s.repo.UpdateUserDisplayName(ctx, userID, trimmed, s.clk.Now())
 }
 
+// ChangePasswordParams defines inputs for an authenticated user changing their own password.
+type ChangePasswordParams struct {
+	UserID          uuid.UUID
+	CurrentSession  uuid.UUID
+	CurrentPassword string
+	NewPassword     string
+	ClientIP        string
+}
+
+// ChangeOwnPassword verifies the caller's current password, updates the Argon2id hash,
+// revokes all other active sessions of the user, and records an audit event.
+func (s *Service) ChangeOwnPassword(ctx context.Context, params ChangePasswordParams) error {
+	if strings.TrimSpace(params.CurrentPassword) == "" {
+		return apperror.Validation("current password is required", apperror.FieldError{
+			Field:   "currentPassword",
+			Message: "currentPassword is required",
+		})
+	}
+	if err := auth.ValidatePasswordPolicy(params.NewPassword); err != nil {
+		return err
+	}
+	newHash, err := auth.HashPassword(params.NewPassword)
+	if err != nil {
+		return apperror.Internal(err)
+	}
+
+	now := s.clk.Now()
+	return s.txRunner.WithinTx(ctx, func(txCtx context.Context) error {
+		user, err := s.repo.GetUserByIDForUpdate(txCtx, params.UserID)
+		if err != nil {
+			return err
+		}
+		if user.Status != domain.UserStatusActive {
+			return apperror.Unauthenticated("account is not active")
+		}
+		cred, err := s.repo.GetUserCredentialForUpdate(txCtx, user.ID)
+		if err != nil {
+			return err
+		}
+		ok, err := auth.VerifyPassword(params.CurrentPassword, cred.PasswordHash)
+		if err != nil || !ok {
+			return apperror.Unauthenticated("current password is incorrect")
+		}
+		if err := s.repo.UpsertUserCredential(txCtx, user.ID, newHash, now); err != nil {
+			return err
+		}
+		if err := s.repo.RevokeOtherUserAuthSessions(txCtx, user.ID, params.CurrentSession, now); err != nil {
+			return err
+		}
+		if s.audit != nil {
+			if err := s.audit.Record(txCtx, auditapp.AuditEntry{
+				ActorUserID:   &user.ID,
+				Action:        "identity.password_changed",
+				ResourceType:  "user",
+				ResourceID:    &user.ID,
+				RequestID:     platformhttp.RequestIDUUIDFromContext(txCtx),
+				CorrelationID: platformhttp.CorrelationIDUUIDFromContext(txCtx),
+				IPHash:        auth.HashIdentifier(params.ClientIP),
+				Reason:        "self-service password change; revoked other sessions",
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// ListOwnSessions returns all active, non-expired sessions belonging exclusively to userID.
+func (s *Service) ListOwnSessions(ctx context.Context, userID uuid.UUID) ([]domain.AuthSession, error) {
+	return s.repo.ListActiveSessionsByUser(ctx, userID, s.clk.Now())
+}
+
+// RevokeOwnSession revokes a specific session if and only if it belongs to userID (contextual ownership guard).
+func (s *Service) RevokeOwnSession(ctx context.Context, userID, sessionID uuid.UUID) error {
+	now := s.clk.Now()
+	return s.txRunner.WithinTx(ctx, func(txCtx context.Context) error {
+		rows, err := s.repo.RevokeAuthSessionByID(txCtx, sessionID, userID, now)
+		if err != nil {
+			return err
+		}
+		if rows == 0 {
+			return apperror.NotFound("session not found")
+		}
+		if s.audit != nil {
+			if err := s.audit.Record(txCtx, auditapp.AuditEntry{
+				ActorUserID:   &userID,
+				Action:        "identity.session_revoked",
+				ResourceType:  "auth_session",
+				ResourceID:    &sessionID,
+				RequestID:     platformhttp.RequestIDUUIDFromContext(txCtx),
+				CorrelationID: platformhttp.CorrelationIDUUIDFromContext(txCtx),
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (s *Service) issueSessionInTx(
 	ctx context.Context,
 	user domain.User,

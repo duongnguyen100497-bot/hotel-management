@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	identityapp "github.com/trandinh0506/hotel-management/backend/internal/modules/identity/application"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/apperror"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/auth"
@@ -23,7 +24,7 @@ type HandlerConfig struct {
 	LoginLimiter platformhttp.RateLimiter
 }
 
-// Handler serves /api/v1/auth/* endpoints.
+// Handler serves /api/v1/auth/* and /api/v1/me/{password,sessions} endpoints.
 type Handler struct {
 	svc          *identityapp.Service
 	tokens       *auth.TokenManager
@@ -55,11 +56,16 @@ func (h *Handler) RegisterRoutes(api *gin.RouterGroup, authMiddleware gin.Handle
 	authGroup.POST("/password-reset-requests", platformhttp.RateLimitMiddleware(h.loginLimiter, loginRateLimitKey), h.handlePasswordResetRequest)
 	authGroup.POST("/password-reset-confirm", h.handlePasswordResetConfirm)
 
-	if authMiddleware != nil {
-		authGroup.POST("/logout", authMiddleware, h.handleLogout)
-	} else {
-		authGroup.POST("/logout", auth.AuthenticatorMiddleware(h.tokens, h.svc), h.handleLogout)
+	meAuth := authMiddleware
+	if meAuth == nil {
+		meAuth = auth.AuthenticatorMiddleware(h.tokens, h.svc)
 	}
+	authGroup.POST("/logout", meAuth, h.handleLogout)
+
+	meGroup := api.Group("/me", meAuth)
+	meGroup.POST("/password", h.handleChangeOwnPassword)
+	meGroup.GET("/sessions", h.handleListOwnSessions)
+	meGroup.DELETE("/sessions/:id", h.handleRevokeOwnSession)
 }
 
 func loginRateLimitKey(c *gin.Context) string {
@@ -111,6 +117,19 @@ type passwordResetConfirmRequest struct {
 type activateAccountRequest struct {
 	Token    string `json:"token"`
 	Password string `json:"password"`
+}
+
+type changePasswordRequest struct {
+	CurrentPassword string `json:"currentPassword"`
+	NewPassword     string `json:"newPassword"`
+}
+
+type sessionView struct {
+	ID        string `json:"id"`
+	FamilyID  string `json:"familyId"`
+	IssuedAt  string `json:"issuedAt"`
+	ExpiresAt string `json:"expiresAt"`
+	Current   bool   `json:"current"`
 }
 
 type authResponse struct {
@@ -293,4 +312,73 @@ func (h *Handler) handleActivate(c *gin.Context) {
 		ExpiresIn:   res.ExpiresIn,
 		User:        res.User,
 	})
+}
+
+func (h *Handler) handleChangeOwnPassword(c *gin.Context) {
+	principal, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		platformhttp.WriteError(c, apperror.Unauthenticated("authentication required"))
+		return
+	}
+	var req changePasswordRequest
+	if err := platformhttp.DecodeJSON(c, &req); err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	if err := h.svc.ChangeOwnPassword(c.Request.Context(), identityapp.ChangePasswordParams{
+		UserID:          principal.UserID,
+		CurrentSession:  principal.SessionID,
+		CurrentPassword: req.CurrentPassword,
+		NewPassword:     req.NewPassword,
+		ClientIP:        c.ClientIP(),
+	}); err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	platformhttp.WriteJSON(c, http.StatusOK, gin.H{"status": "password_changed"})
+}
+
+func (h *Handler) handleListOwnSessions(c *gin.Context) {
+	principal, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		platformhttp.WriteError(c, apperror.Unauthenticated("authentication required"))
+		return
+	}
+	sessions, err := h.svc.ListOwnSessions(c.Request.Context(), principal.UserID)
+	if err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	views := make([]sessionView, 0, len(sessions))
+	for _, s := range sessions {
+		views = append(views, sessionView{
+			ID:        s.ID.String(),
+			FamilyID:  s.FamilyID.String(),
+			IssuedAt:  s.IssuedAt.UTC().Format(time.RFC3339),
+			ExpiresAt: s.ExpiresAt.UTC().Format(time.RFC3339),
+			Current:   s.ID == principal.SessionID,
+		})
+	}
+	platformhttp.WriteJSON(c, http.StatusOK, gin.H{"data": views})
+}
+
+func (h *Handler) handleRevokeOwnSession(c *gin.Context) {
+	principal, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		platformhttp.WriteError(c, apperror.Unauthenticated("authentication required"))
+		return
+	}
+	sessionID, err := uuid.Parse(c.Param("id"))
+	if err != nil || sessionID == uuid.Nil {
+		platformhttp.WriteError(c, apperror.Validation("invalid session ID", apperror.FieldError{
+			Field:   "id",
+			Message: "must be a valid UUID",
+		}))
+		return
+	}
+	if err := h.svc.RevokeOwnSession(c.Request.Context(), principal.UserID, sessionID); err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
 }

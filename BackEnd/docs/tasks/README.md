@@ -105,7 +105,7 @@ flowchart LR
 | [x] | **T1.3** | Quên mật khẩu & Adapter gửi email SMTP qua Outbox (Mailpit / Gmail) | `T1.2`, `T0.5` | — | `feat(notification): add smtp outbox delivery and password reset flow` |
 | [x] | **T1.4** | Dynamic RBAC middleware, Root bypass bất biến & API quản trị Role/Permission/User-Role | `T1.2` | — | `feat(rbac): implement dynamic authorization middleware, root bypass and rbac management apis` |
 | [x] | **T1.5** | Schema People, CRUD nhân viên & Luồng kích hoạt nhân viên qua Email SMTP | `T1.3`, `T1.4` | `000004` | `feat(people): add employee crud and atomic smtp email activation workflow` |
-| [ ] | **T1.6** | Quản lý hồ sơ khách hàng (Staff CRUD) & Tự quản lý tài khoản `/me` | `T1.5` | — | `feat(people): add customer profile management and self-service me endpoints` |
+| [x] | **T1.6** | Quản lý hồ sơ khách hàng (Staff CRUD) & Tự quản lý tài khoản `/me` | `T1.5` | — | `feat(people): add customer profile management and self-service me endpoints` |
 
 ### Phase 2 — Khách sạn, VAT, Phòng, Dịch vụ & MinIO Media ([phase-2-property-vat-media.md](phase-2-property-vat-media.md))
 
