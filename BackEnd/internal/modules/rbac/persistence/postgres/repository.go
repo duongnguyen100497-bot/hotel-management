@@ -370,12 +370,46 @@ func (r *Repository) ListUserEffectivePermissionCodes(ctx context.Context, userI
 	return codes, db.MapPgError(err)
 }
 
-func (r *Repository) ListUsersWithRoles(ctx context.Context, limit int) ([]sqlcgen.ListUsersWithRolesRow, error) {
+// UserAccountRow represents a user row projected by RBAC user-role listing queries.
+type UserAccountRow struct {
+	ID                   uuid.UUID
+	Kind                 string
+	Email                string
+	Username             string
+	DisplayName          string
+	Status               string
+	AuthorizationVersion int
+	LastLoginAt          *time.Time
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+	Version              int
+}
+
+func (r *Repository) ListUsersWithRoles(ctx context.Context, limit int) ([]UserAccountRow, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 	rows, err := r.queries(ctx).ListUsersWithRoles(ctx, int32(limit))
-	return rows, db.MapPgError(err)
+	if err != nil {
+		return nil, db.MapPgError(err)
+	}
+	out := make([]UserAccountRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, UserAccountRow{
+			ID:                   row.ID,
+			Kind:                 row.Kind,
+			Email:                row.Email,
+			Username:             row.Username,
+			DisplayName:          row.DisplayName,
+			Status:               row.Status,
+			AuthorizationVersion: int(row.AuthorizationVersion),
+			LastLoginAt:          row.LastLoginAt,
+			CreatedAt:            row.CreatedAt,
+			UpdatedAt:            row.UpdatedAt,
+			Version:              int(row.Version),
+		})
+	}
+	return out, nil
 }
 
 func mapPermissionRow(row sqlcgen.Permission) domain.Permission {

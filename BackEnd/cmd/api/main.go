@@ -23,6 +23,9 @@ import (
 	identityhttp "github.com/trandinh0506/hotel-management/backend/internal/modules/identity/delivery/http"
 	identitypg "github.com/trandinh0506/hotel-management/backend/internal/modules/identity/persistence/postgres"
 	"github.com/trandinh0506/hotel-management/backend/internal/modules/notification"
+	rbacapp "github.com/trandinh0506/hotel-management/backend/internal/modules/rbac/application"
+	rbachttp "github.com/trandinh0506/hotel-management/backend/internal/modules/rbac/delivery/http"
+	rbacpg "github.com/trandinh0506/hotel-management/backend/internal/modules/rbac/persistence/postgres"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/auth"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/clock"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/config"
@@ -122,12 +125,15 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	identitySvc := identityapp.NewService(txRunner, identitypg.NewRepository(pool), auditSvc, auditSvc, sysClock, idGen).
 		WithTokenManager(tokenManager).
 		WithPayloadCipher(payloadCipher)
+	rbacSvc := rbacapp.NewService(txRunner, rbacpg.NewRepository(pool), identitySvc, auditSvc, sysClock, idGen)
+
 	authMiddleware := auth.AuthenticatorMiddleware(tokenManager, identitySvc)
 	identityHandler := identityhttp.NewHandler(identityhttp.HandlerConfig{
 		Service:      identitySvc,
 		Tokens:       tokenManager,
 		SecureCookie: cfg.AppEnv == config.EnvProduction,
 	})
+	rbacHandler := rbachttp.NewHandler(rbacSvc)
 
 	router := platformhttp.NewRouter(platformhttp.RouterConfig{
 		Logger:             logger,
@@ -137,6 +143,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		ReadyzChecks:       deps,
 	}, func(api *gin.RouterGroup) {
 		identityHandler.RegisterRoutes(api, authMiddleware)
+		rbacHandler.RegisterRoutes(api, authMiddleware)
 	})
 
 	srv := &http.Server{

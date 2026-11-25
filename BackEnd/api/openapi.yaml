@@ -200,6 +200,179 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /api/v1/permissions:
+    get:
+      summary: List all active permissions
+      operationId: listPermissions
+      tags:
+        - RBAC
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Active permission registry
+        "401":
+          description: Unauthenticated
+        "403":
+          description: Forbidden
+    post:
+      summary: Create a custom permission code (code is immutable after creation)
+      operationId: createPermission
+      tags:
+        - RBAC
+      security:
+        - BearerAuth: []
+      responses:
+        "201":
+          description: Permission created
+        "403":
+          description: Forbidden
+        "409":
+          description: Duplicate permission code
+
+  /api/v1/permissions/{id}:
+    patch:
+      summary: Update permission display name and description
+      operationId: updatePermission
+      tags:
+        - RBAC
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Permission updated
+        "403":
+          description: Forbidden
+
+  /api/v1/roles:
+    get:
+      summary: List active roles and their assigned permissions
+      operationId: listRoles
+      tags:
+        - RBAC
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Roles list
+    post:
+      summary: Create a custom non-system role
+      operationId: createRole
+      tags:
+        - RBAC
+      security:
+        - BearerAuth: []
+      responses:
+        "201":
+          description: Role created
+        "403":
+          description: Forbidden
+        "409":
+          description: Duplicate role code
+
+  /api/v1/roles/{id}:
+    patch:
+      summary: Update role display name and description
+      operationId: updateRole
+      tags:
+        - RBAC
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Role updated
+    delete:
+      summary: Archive a custom role when no users are assigned
+      operationId: deleteRole
+      tags:
+        - RBAC
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Role archived
+        "409":
+          description: Role is system/root or still has assigned users
+
+  /api/v1/roles/{id}/permissions:
+    put:
+      summary: Replace a role's permission bindings (enforces grantable-set and bumps authorization_version)
+      operationId: setRolePermissions
+      tags:
+        - RBAC
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Role permissions updated
+        "403":
+          description: Privilege escalation denied
+        "409":
+          description: Root role permissions are immutable
+
+  /api/v1/users:
+    get:
+      summary: List users and their assigned roles
+      operationId: listUsers
+      tags:
+        - RBAC
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Users with roles
+
+  /api/v1/users/{id}/roles:
+    put:
+      summary: Replace a staff/admin user's assigned roles (protects last root admin and bumps authorization_version)
+      operationId: setUserRoles
+      tags:
+        - RBAC
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: User roles updated
+        "403":
+          description: Privilege escalation denied
+        "409":
+          description: Cannot remove root role from last active root admin
+
 components:
   securitySchemes:
     BearerAuth:
