@@ -48,6 +48,37 @@ type AuthSession struct {
 	UserAgentHash    []byte     `json:"user_agent_hash"`
 }
 
+type Customer struct {
+	ID              uuid.UUID   `json:"id"`
+	UserID          *uuid.UUID  `json:"user_id"`
+	FullName        string      `json:"full_name"`
+	Phone           string      `json:"phone"`
+	Email           pgtype.Text `json:"email"`
+	NationalityCode pgtype.Text `json:"nationality_code"`
+	GovernmentID    pgtype.Text `json:"government_id"`
+	Address         pgtype.Text `json:"address"`
+	Source          string      `json:"source"`
+	ArchivedAt      *time.Time  `json:"archived_at"`
+	CreatedAt       time.Time   `json:"created_at"`
+	UpdatedAt       time.Time   `json:"updated_at"`
+	Version         int32       `json:"version"`
+}
+
+type Employee struct {
+	ID               uuid.UUID  `json:"id"`
+	UserID           uuid.UUID  `json:"user_id"`
+	EmployeeCode     string     `json:"employee_code"`
+	FullName         string     `json:"full_name"`
+	Phone            string     `json:"phone"`
+	Email            string     `json:"email"`
+	PositionTitle    string     `json:"position_title"`
+	EmploymentStatus string     `json:"employment_status"`
+	ArchivedAt       *time.Time `json:"archived_at"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+	Version          int32      `json:"version"`
+}
+
 type OutboxEvent struct {
 	ID            uuid.UUID   `json:"id"`
 	AggregateType string      `json:"aggregate_type"`

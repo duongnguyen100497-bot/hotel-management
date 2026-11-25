@@ -26,6 +26,9 @@ import (
 	rbacapp "github.com/trandinh0506/hotel-management/backend/internal/modules/rbac/application"
 	rbachttp "github.com/trandinh0506/hotel-management/backend/internal/modules/rbac/delivery/http"
 	rbacpg "github.com/trandinh0506/hotel-management/backend/internal/modules/rbac/persistence/postgres"
+	peopleapp "github.com/trandinh0506/hotel-management/backend/internal/modules/people/application"
+	peoplehttp "github.com/trandinh0506/hotel-management/backend/internal/modules/people/delivery/http"
+	peoplepg "github.com/trandinh0506/hotel-management/backend/internal/modules/people/persistence/postgres"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/auth"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/clock"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/config"
@@ -126,6 +129,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		WithTokenManager(tokenManager).
 		WithPayloadCipher(payloadCipher)
 	rbacSvc := rbacapp.NewService(txRunner, rbacpg.NewRepository(pool), identitySvc, auditSvc, sysClock, idGen)
+	peopleSvc := peopleapp.NewService(txRunner, peoplepg.NewRepository(pool), identitySvc, rbacSvc, auditSvc, auditSvc, sysClock, idGen)
 
 	authMiddleware := auth.AuthenticatorMiddleware(tokenManager, identitySvc)
 	identityHandler := identityhttp.NewHandler(identityhttp.HandlerConfig{
@@ -134,6 +138,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		SecureCookie: cfg.AppEnv == config.EnvProduction,
 	})
 	rbacHandler := rbachttp.NewHandler(rbacSvc)
+	peopleHandler := peoplehttp.NewHandler(peopleSvc, rbacSvc)
 
 	router := platformhttp.NewRouter(platformhttp.RouterConfig{
 		Logger:             logger,
@@ -144,6 +149,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	}, func(api *gin.RouterGroup) {
 		identityHandler.RegisterRoutes(api, authMiddleware)
 		rbacHandler.RegisterRoutes(api, authMiddleware)
+		peopleHandler.RegisterRoutes(api, authMiddleware)
 	})
 
 	srv := &http.Server{

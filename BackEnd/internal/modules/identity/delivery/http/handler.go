@@ -51,6 +51,7 @@ func (h *Handler) RegisterRoutes(api *gin.RouterGroup, authMiddleware gin.Handle
 	authGroup.POST("/register", h.handleRegister)
 	authGroup.POST("/login", platformhttp.RateLimitMiddleware(h.loginLimiter, loginRateLimitKey), h.handleLogin)
 	authGroup.POST("/refresh", h.handleRefresh)
+	authGroup.POST("/activate", h.handleActivate)
 	authGroup.POST("/password-reset-requests", platformhttp.RateLimitMiddleware(h.loginLimiter, loginRateLimitKey), h.handlePasswordResetRequest)
 	authGroup.POST("/password-reset-confirm", h.handlePasswordResetConfirm)
 
@@ -103,6 +104,11 @@ type passwordResetRequest struct {
 }
 
 type passwordResetConfirmRequest struct {
+	Token    string `json:"token"`
+	Password string `json:"password"`
+}
+
+type activateAccountRequest struct {
 	Token    string `json:"token"`
 	Password string `json:"password"`
 }
@@ -260,5 +266,31 @@ func (h *Handler) handlePasswordResetConfirm(c *gin.Context) {
 	auth.ClearRefreshCookie(c, h.secureCookie)
 	platformhttp.WriteJSON(c, http.StatusOK, gin.H{
 		"status": "password_reset_confirmed",
+	})
+}
+
+func (h *Handler) handleActivate(c *gin.Context) {
+	var req activateAccountRequest
+	if err := platformhttp.DecodeJSON(c, &req); err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+
+	res, err := h.svc.ActivateAccount(c.Request.Context(), identityapp.ActivateAccountParams{
+		RawToken:  req.Token,
+		Password:  req.Password,
+		ClientIP:  c.ClientIP(),
+		UserAgent: c.Request.UserAgent(),
+	})
+	if err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+
+	auth.SetRefreshCookie(c, res.RefreshToken, h.tokens.RefreshTTL(), h.secureCookie)
+	platformhttp.WriteJSON(c, http.StatusOK, authResponse{
+		AccessToken: res.AccessToken,
+		ExpiresIn:   res.ExpiresIn,
+		User:        res.User,
 	})
 }

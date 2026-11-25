@@ -676,6 +676,275 @@ func (s *Service) ConfirmPasswordReset(ctx context.Context, params PasswordReset
 	})
 }
 
+// CreatePendingStaffParams defines inputs for provisioning a pending staff user and single-use activation token.
+type CreatePendingStaffParams struct {
+	Email       string
+	DisplayName string
+	Username    string
+}
+
+// PendingStaffProvision bundles the created pending staff user with the AES-256-GCM encrypted activation token.
+type PendingStaffProvision struct {
+	User           domain.User
+	TokenID        uuid.UUID
+	EncryptedToken string
+	ExpiresAt      time.Time
+}
+
+// ActivateAccountParams defines inputs for activating a pending staff user account.
+type ActivateAccountParams struct {
+	RawToken  string
+	Password  string
+	ClientIP  string
+	UserAgent string
+}
+
+// CreatePendingStaffUser creates a staff user in pending_activation status and issues a 24h single-use activation token
+// (SHA-256 hash stored in activation_tokens, AES-256-GCM ciphertext returned for outbox delivery).
+func (s *Service) CreatePendingStaffUser(ctx context.Context, params CreatePendingStaffParams) (PendingStaffProvision, error) {
+	if s.cipher == nil {
+		return PendingStaffProvision{}, apperror.Internal(nil)
+	}
+	email, err := normalizeEmail(params.Email)
+	if err != nil {
+		return PendingStaffProvision{}, err
+	}
+	displayName := strings.TrimSpace(params.DisplayName)
+	if displayName == "" {
+		return PendingStaffProvision{}, apperror.Validation("invalid display name", apperror.FieldError{
+			Field:   "fullName",
+			Message: "full name is required",
+		})
+	}
+
+	rawToken, tokenHash, err := auth.GenerateOpaqueToken()
+	if err != nil {
+		return PendingStaffProvision{}, apperror.Internal(err)
+	}
+	encryptedToken, err := s.cipher.Encrypt(rawToken)
+	if err != nil {
+		return PendingStaffProvision{}, apperror.Internal(err)
+	}
+
+	now := s.clk.Now()
+	expiresAt := now.Add(activationTokenTTL)
+	var out PendingStaffProvision
+
+	err = s.txRunner.WithinTx(ctx, func(txCtx context.Context) error {
+		user, err := s.repo.CreateUser(txCtx, domain.User{
+			ID:          s.ids.NewUUID(),
+			Kind:        domain.UserKindStaff,
+			Email:       email,
+			Username:    strings.TrimSpace(params.Username),
+			DisplayName: displayName,
+			Status:      domain.UserStatusPendingActivation,
+			CreatedAt:   now,
+		})
+		if err != nil {
+			return err
+		}
+		tok, err := s.repo.InsertActivationToken(txCtx, domain.OneTimeToken{
+			ID:        s.ids.NewUUID(),
+			UserID:    user.ID,
+			TokenHash: tokenHash,
+			ExpiresAt: expiresAt,
+			CreatedAt: now,
+		})
+		if err != nil {
+			return err
+		}
+		out = PendingStaffProvision{
+			User:           user,
+			TokenID:        tok.ID,
+			EncryptedToken: encryptedToken,
+			ExpiresAt:      expiresAt,
+		}
+		return nil
+	})
+	return out, err
+}
+
+// ReissueActivationToken invalidates any unused activation tokens for a user still in pending_activation
+// and mints a fresh 24h activation token.
+func (s *Service) ReissueActivationToken(ctx context.Context, userID uuid.UUID) (PendingStaffProvision, error) {
+	if s.cipher == nil {
+		return PendingStaffProvision{}, apperror.Internal(nil)
+	}
+	rawToken, tokenHash, err := auth.GenerateOpaqueToken()
+	if err != nil {
+		return PendingStaffProvision{}, apperror.Internal(err)
+	}
+	encryptedToken, err := s.cipher.Encrypt(rawToken)
+	if err != nil {
+		return PendingStaffProvision{}, apperror.Internal(err)
+	}
+
+	now := s.clk.Now()
+	expiresAt := now.Add(activationTokenTTL)
+	var out PendingStaffProvision
+
+	err = s.txRunner.WithinTx(ctx, func(txCtx context.Context) error {
+		user, err := s.repo.GetUserByIDForUpdate(txCtx, userID)
+		if err != nil {
+			return err
+		}
+		if user.Status != domain.UserStatusPendingActivation {
+			return apperror.Conflict("user account is not in pending_activation status")
+		}
+		if err := s.repo.InvalidateUnusedActivationTokensByUser(txCtx, user.ID, now); err != nil {
+			return err
+		}
+		tok, err := s.repo.InsertActivationToken(txCtx, domain.OneTimeToken{
+			ID:        s.ids.NewUUID(),
+			UserID:    user.ID,
+			TokenHash: tokenHash,
+			ExpiresAt: expiresAt,
+			CreatedAt: now,
+		})
+		if err != nil {
+			return err
+		}
+		out = PendingStaffProvision{
+			User:           user,
+			TokenID:        tok.ID,
+			EncryptedToken: encryptedToken,
+			ExpiresAt:      expiresAt,
+		}
+		return nil
+	})
+	return out, err
+}
+
+// ActivateAccount consumes a single-use activation token (locked FOR UPDATE), stores the Argon2id password hash,
+// transitions the user from pending_activation to active, records an audit event, and issues a login session.
+func (s *Service) ActivateAccount(ctx context.Context, params ActivateAccountParams) (AuthTokens, error) {
+	if s.tokens == nil {
+		return AuthTokens{}, apperror.Internal(nil)
+	}
+	rawToken := strings.TrimSpace(params.RawToken)
+	if rawToken == "" {
+		return AuthTokens{}, apperror.Validation("invalid activation token", apperror.FieldError{
+			Field:   "token",
+			Message: "token is required",
+		})
+	}
+	if err := auth.ValidatePasswordPolicy(params.Password); err != nil {
+		return AuthTokens{}, err
+	}
+	passwordHash, err := auth.HashPassword(params.Password)
+	if err != nil {
+		return AuthTokens{}, apperror.Internal(err)
+	}
+
+	tokenHash := auth.HashOpaqueToken(rawToken)
+	now := s.clk.Now()
+	var result AuthTokens
+
+	err = s.txRunner.WithinTx(ctx, func(txCtx context.Context) error {
+		tok, err := s.repo.GetActivationTokenByHashForUpdate(txCtx, tokenHash)
+		if err != nil {
+			return apperror.Unauthenticated("invalid or expired activation token")
+		}
+		if tok.UsedAt != nil || !tok.ExpiresAt.After(now) {
+			return apperror.Unauthenticated("invalid or expired activation token")
+		}
+
+		user, err := s.repo.GetUserByIDForUpdate(txCtx, tok.UserID)
+		if err != nil {
+			return apperror.Unauthenticated("invalid or expired activation token")
+		}
+		if user.Status != domain.UserStatusPendingActivation {
+			return apperror.Unauthenticated("account is not eligible for activation")
+		}
+
+		if err := s.repo.UpsertUserCredential(txCtx, user.ID, passwordHash, now); err != nil {
+			return err
+		}
+		updatedUser, err := s.repo.UpdateUserStatus(txCtx, user.ID, domain.UserStatusActive, now)
+		if err != nil {
+			return err
+		}
+		if err := s.repo.MarkActivationTokenUsed(txCtx, tok.ID, now); err != nil {
+			return err
+		}
+		if err := s.repo.InvalidateUnusedActivationTokensByUser(txCtx, user.ID, now); err != nil {
+			return err
+		}
+		if err := s.repo.TouchUserLastLogin(txCtx, user.ID, now); err != nil {
+			return err
+		}
+
+		tokens, err := s.issueSessionInTx(txCtx, updatedUser, s.ids.NewUUID(), params.ClientIP, params.UserAgent)
+		if err != nil {
+			return err
+		}
+
+		if s.audit != nil {
+			if err := s.audit.Record(txCtx, auditapp.AuditEntry{
+				ActorUserID:   &updatedUser.ID,
+				Action:        "identity.account_activated",
+				ResourceType:  "user",
+				ResourceID:    &updatedUser.ID,
+				RequestID:     platformhttp.RequestIDUUIDFromContext(txCtx),
+				CorrelationID: platformhttp.CorrelationIDUUIDFromContext(txCtx),
+				IPHash:        auth.HashIdentifier(params.ClientIP),
+				BeforeData: map[string]any{
+					"status": domain.UserStatusPendingActivation,
+				},
+				AfterData: map[string]any{
+					"status": updatedUser.Status,
+				},
+			}); err != nil {
+				return err
+			}
+		}
+
+		result = tokens
+		return nil
+	})
+	return result, err
+}
+
+// DeactivateUser transitions a user account to disabled, invalidates unused activation/reset tokens,
+// revokes all active sessions, and increments authorization_version inside the active transaction.
+func (s *Service) DeactivateUser(ctx context.Context, userID uuid.UUID) (domain.User, error) {
+	now := s.clk.Now()
+	var updated domain.User
+	err := s.txRunner.WithinTx(ctx, func(txCtx context.Context) error {
+		if _, err := s.repo.GetUserByIDForUpdate(txCtx, userID); err != nil {
+			return err
+		}
+		u, err := s.repo.UpdateUserStatus(txCtx, userID, domain.UserStatusDisabled, now)
+		if err != nil {
+			return err
+		}
+		if err := s.repo.InvalidateUnusedActivationTokensByUser(txCtx, userID, now); err != nil {
+			return err
+		}
+		if err := s.repo.InvalidateUnusedPasswordResetTokensByUser(txCtx, userID, now); err != nil {
+			return err
+		}
+		if err := s.repo.RevokeAllUserAuthSessions(txCtx, userID, now); err != nil {
+			return err
+		}
+		updated = u
+		return nil
+	})
+	return updated, err
+}
+
+// UpdateDisplayName updates the display_name of userID inside the active transaction.
+func (s *Service) UpdateDisplayName(ctx context.Context, userID uuid.UUID, displayName string) (domain.User, error) {
+	trimmed := strings.TrimSpace(displayName)
+	if trimmed == "" {
+		return domain.User{}, apperror.Validation("invalid display name", apperror.FieldError{
+			Field:   "displayName",
+			Message: "display name is required",
+		})
+	}
+	return s.repo.UpdateUserDisplayName(ctx, userID, trimmed, s.clk.Now())
+}
+
 func (s *Service) issueSessionInTx(
 	ctx context.Context,
 	user domain.User,

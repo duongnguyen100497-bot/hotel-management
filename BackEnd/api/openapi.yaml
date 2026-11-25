@@ -200,6 +200,136 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /api/v1/auth/activate:
+    post:
+      summary: Activate pending staff user account using single-use email token and set initial password
+      operationId: activateStaffAccount
+      tags:
+        - Auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PasswordResetConfirmRequest"
+      responses:
+        "200":
+          description: Account activated and session issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          description: Invalid, expired, or already-used activation token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/admin/employees:
+    get:
+      summary: List employees with account status and assigned roles
+      operationId: listEmployees
+      tags:
+        - People
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Employee list
+    post:
+      summary: Create employee profile, pending staff user, and enqueue SMTP activation link
+      operationId: createEmployee
+      tags:
+        - People
+      security:
+        - BearerAuth: []
+      responses:
+        "201":
+          description: Employee created in pending_activation status
+        "409":
+          description: Duplicate employee code or email
+
+  /api/v1/admin/employees/{id}:
+    get:
+      summary: Get employee details
+      operationId: getEmployee
+      tags:
+        - People
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Employee details
+    patch:
+      summary: Update employee profile with optimistic locking (version)
+      operationId: updateEmployee
+      tags:
+        - People
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Employee updated
+        "409":
+          description: Version conflict
+
+  /api/v1/admin/employees/{id}/resend-activation:
+    post:
+      summary: Invalidate old activation tokens and resend SMTP activation link
+      operationId: resendEmployeeActivation
+      tags:
+        - People
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "202":
+          description: New activation email queued
+        "409":
+          description: Account is already active or disabled
+
+  /api/v1/admin/employees/{id}/deactivate:
+    post:
+      summary: Deactivate employee, disable user account, and revoke all active sessions
+      operationId: deactivateEmployee
+      tags:
+        - People
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Employee deactivated
+        "409":
+          description: Cannot deactivate last active root admin
+
   /api/v1/permissions:
     get:
       summary: List all active permissions
