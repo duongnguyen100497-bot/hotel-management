@@ -51,6 +51,8 @@ func (h *Handler) RegisterRoutes(api *gin.RouterGroup, authMiddleware gin.Handle
 	authGroup.POST("/register", h.handleRegister)
 	authGroup.POST("/login", platformhttp.RateLimitMiddleware(h.loginLimiter, loginRateLimitKey), h.handleLogin)
 	authGroup.POST("/refresh", h.handleRefresh)
+	authGroup.POST("/password-reset-requests", platformhttp.RateLimitMiddleware(h.loginLimiter, loginRateLimitKey), h.handlePasswordResetRequest)
+	authGroup.POST("/password-reset-confirm", h.handlePasswordResetConfirm)
 
 	if authMiddleware != nil {
 		authGroup.POST("/logout", authMiddleware, h.handleLogout)
@@ -94,6 +96,15 @@ type loginRequest struct {
 
 type logoutRequest struct {
 	All bool `json:"all,omitempty"`
+}
+
+type passwordResetRequest struct {
+	Email string `json:"email"`
+}
+
+type passwordResetConfirmRequest struct {
+	Token    string `json:"token"`
+	Password string `json:"password"`
 }
 
 type authResponse struct {
@@ -207,4 +218,47 @@ func (h *Handler) handleLogout(c *gin.Context) {
 
 	auth.ClearRefreshCookie(c, h.secureCookie)
 	c.Status(http.StatusNoContent)
+}
+
+func (h *Handler) handlePasswordResetRequest(c *gin.Context) {
+	var req passwordResetRequest
+	if err := platformhttp.DecodeJSON(c, &req); err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+
+	if err := h.svc.RequestPasswordReset(c.Request.Context(), identityapp.PasswordResetRequestParams{
+		Email:    req.Email,
+		ClientIP: c.ClientIP(),
+	}); err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+
+	platformhttp.WriteJSON(c, http.StatusAccepted, gin.H{
+		"status":  "accepted",
+		"message": "If an active account matches that email, a password reset link will be sent shortly.",
+	})
+}
+
+func (h *Handler) handlePasswordResetConfirm(c *gin.Context) {
+	var req passwordResetConfirmRequest
+	if err := platformhttp.DecodeJSON(c, &req); err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+
+	if err := h.svc.ConfirmPasswordReset(c.Request.Context(), identityapp.PasswordResetConfirmParams{
+		RawToken:    req.Token,
+		NewPassword: req.Password,
+		ClientIP:    c.ClientIP(),
+	}); err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+
+	auth.ClearRefreshCookie(c, h.secureCookie)
+	platformhttp.WriteJSON(c, http.StatusOK, gin.H{
+		"status": "password_reset_confirmed",
+	})
 }

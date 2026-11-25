@@ -30,6 +30,7 @@ import (
 	platformhttp "github.com/trandinh0506/hotel-management/backend/internal/platform/http"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/id"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/logging"
+	"github.com/trandinh0506/hotel-management/backend/internal/platform/smtp"
 )
 
 func main() {
@@ -82,6 +83,24 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		BatchSize:    20,
 	})
 
+	payloadCipher, err := auth.NewPayloadCipher(cfg.JWTRefreshSecret)
+	if err != nil {
+		return fmt.Errorf("init outbox payload cipher: %w", err)
+	}
+	smtpClient := smtp.NewClient(smtp.Config{
+		Host:     cfg.SMTPHost,
+		Port:     cfg.SMTPPort,
+		Username: cfg.SMTPUser,
+		Password: cfg.SMTPPass,
+		From:     cfg.SMTPFrom,
+	})
+	_ = notification.NewEmailDispatcher(notification.EmailDispatcherConfig{
+		Sender:          smtpClient,
+		Cipher:          payloadCipher,
+		FrontendBaseURL: cfg.FrontendBaseURL,
+		PublicBaseURL:   cfg.PublicBaseURL,
+	}, outboxWorker)
+
 	workerWG.Add(1)
 	go func() {
 		defer workerWG.Done()
@@ -101,7 +120,8 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 
 	tokenManager := auth.NewTokenManager(cfg.JWTAccessSecret, cfg.JWTAccessTTL, cfg.JWTRefreshTTL, sysClock)
 	identitySvc := identityapp.NewService(txRunner, identitypg.NewRepository(pool), auditSvc, auditSvc, sysClock, idGen).
-		WithTokenManager(tokenManager)
+		WithTokenManager(tokenManager).
+		WithPayloadCipher(payloadCipher)
 	authMiddleware := auth.AuthenticatorMiddleware(tokenManager, identitySvc)
 	identityHandler := identityhttp.NewHandler(identityhttp.HandlerConfig{
 		Service:      identitySvc,

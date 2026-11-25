@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"net/mail"
 	"strings"
 	"time"
@@ -36,6 +37,11 @@ const (
 
 	maxFailedLoginAttempts = 5
 	loginLockoutDuration   = 15 * time.Minute
+	passwordResetTokenTTL  = 30 * time.Minute
+	activationTokenTTL     = 24 * time.Hour
+
+	EventPasswordResetRequested      = "identity.password_reset_requested"
+	EventEmployeeActivationRequested = "identity.employee_activation_requested"
 )
 
 // dummyArgon2idHash is verified when a login email does not exist so timing remains consistent.
@@ -158,6 +164,7 @@ type Service struct {
 	audit        auditapp.Recorder
 	outbox       auditapp.OutboxEnqueuer
 	tokens       *auth.TokenManager
+	cipher       *auth.PayloadCipher
 	clk          clock.Clock
 	ids          id.Generator
 	customerHook CustomerRegistrationHook
@@ -191,6 +198,12 @@ func NewService(
 // WithTokenManager configures the JWT & refresh token manager on the identity service.
 func (s *Service) WithTokenManager(tm *auth.TokenManager) *Service {
 	s.tokens = tm
+	return s
+}
+
+// WithPayloadCipher configures AES-256-GCM encryption for sensitive tokens stored in outbox payloads.
+func (s *Service) WithPayloadCipher(cipher *auth.PayloadCipher) *Service {
+	s.cipher = cipher
 	return s
 }
 
@@ -479,6 +492,187 @@ func (s *Service) Logout(ctx context.Context, params LogoutParams) error {
 		}
 		_, err := s.repo.RevokeAuthSessionByID(txCtx, params.SessionID, params.UserID, now)
 		return err
+	})
+}
+
+// PasswordResetRequestParams defines parameters for initiating a password reset.
+type PasswordResetRequestParams struct {
+	Email    string
+	ClientIP string
+}
+
+// PasswordResetConfirmParams defines parameters for completing a password reset with a single-use token.
+type PasswordResetConfirmParams struct {
+	RawToken    string
+	NewPassword string
+	ClientIP    string
+}
+
+type passwordResetOutboxPayload struct {
+	UserID         uuid.UUID `json:"userId"`
+	Email          string    `json:"email"`
+	DisplayName    string    `json:"displayName"`
+	EncryptedToken string    `json:"encryptedToken"`
+	ExpiresAt      time.Time `json:"expiresAt"`
+}
+
+// RequestPasswordReset generates a 32-byte single-use token (stored as SHA-256 in password_reset_tokens,
+// encrypted with AES-256-GCM in outbox_events) if the email belongs to an active user.
+// It always returns nil for non-existent or inactive emails to prevent account enumeration.
+func (s *Service) RequestPasswordReset(ctx context.Context, params PasswordResetRequestParams) error {
+	email, err := normalizeEmail(params.Email)
+	if err != nil {
+		return err
+	}
+	if s.cipher == nil || s.outbox == nil {
+		return apperror.Internal(nil)
+	}
+
+	user, err := s.repo.GetUserByEmail(ctx, email)
+	if err != nil || user.Status != domain.UserStatusActive {
+		return nil
+	}
+
+	rawToken, tokenHash, err := auth.GenerateOpaqueToken()
+	if err != nil {
+		return apperror.Internal(err)
+	}
+	encryptedToken, err := s.cipher.Encrypt(rawToken)
+	if err != nil {
+		return apperror.Internal(err)
+	}
+
+	now := s.clk.Now()
+	expiresAt := now.Add(passwordResetTokenTTL)
+
+	payloadBytes, err := json.Marshal(passwordResetOutboxPayload{
+		UserID:         user.ID,
+		Email:          user.Email,
+		DisplayName:    user.DisplayName,
+		EncryptedToken: encryptedToken,
+		ExpiresAt:      expiresAt,
+	})
+	if err != nil {
+		return apperror.Internal(err)
+	}
+
+	return s.txRunner.WithinTx(ctx, func(txCtx context.Context) error {
+		lockedUser, err := s.repo.GetUserByIDForUpdate(txCtx, user.ID)
+		if err != nil || lockedUser.Status != domain.UserStatusActive {
+			return nil
+		}
+		if err := s.repo.InvalidateUnusedPasswordResetTokensByUser(txCtx, lockedUser.ID, now); err != nil {
+			return err
+		}
+		tok, err := s.repo.InsertPasswordResetToken(txCtx, domain.OneTimeToken{
+			ID:        s.ids.NewUUID(),
+			UserID:    lockedUser.ID,
+			TokenHash: tokenHash,
+			ExpiresAt: expiresAt,
+			CreatedAt: now,
+		})
+		if err != nil {
+			return err
+		}
+		if err := s.outbox.Enqueue(txCtx, auditapp.OutboxEvent{
+			ID:            s.ids.NewUUID(),
+			AggregateType: "user",
+			AggregateID:   lockedUser.ID,
+			EventType:     EventPasswordResetRequested,
+			Payload:       payloadBytes,
+			OccurredAt:    now,
+			AvailableAt:   now,
+		}); err != nil {
+			return err
+		}
+		if s.audit != nil {
+			if err := s.audit.Record(txCtx, auditapp.AuditEntry{
+				ActorUserID:   &lockedUser.ID,
+				Action:        "identity.password_reset_requested",
+				ResourceType:  "password_reset_token",
+				ResourceID:    &tok.ID,
+				RequestID:     platformhttp.RequestIDUUIDFromContext(txCtx),
+				CorrelationID: platformhttp.CorrelationIDUUIDFromContext(txCtx),
+				IPHash:        auth.HashIdentifier(params.ClientIP),
+				AfterData: map[string]any{
+					"user_id":    lockedUser.ID.String(),
+					"expires_at": expiresAt.UTC().Format(time.RFC3339),
+				},
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// ConfirmPasswordReset locks the token by SHA-256 hash (FOR UPDATE), verifies it is unused and unexpired,
+// updates the Argon2id password hash, marks the token used, revokes all sessions of the user, bumps
+// authorization_version, and records an audit entry atomically in a single transaction.
+func (s *Service) ConfirmPasswordReset(ctx context.Context, params PasswordResetConfirmParams) error {
+	rawToken := strings.TrimSpace(params.RawToken)
+	if rawToken == "" {
+		return apperror.Validation("invalid reset token", apperror.FieldError{
+			Field:   "token",
+			Message: "token is required",
+		})
+	}
+	if err := auth.ValidatePasswordPolicy(params.NewPassword); err != nil {
+		return err
+	}
+	newHash, err := auth.HashPassword(params.NewPassword)
+	if err != nil {
+		return apperror.Internal(err)
+	}
+
+	tokenHash := auth.HashOpaqueToken(rawToken)
+	now := s.clk.Now()
+
+	return s.txRunner.WithinTx(ctx, func(txCtx context.Context) error {
+		tok, err := s.repo.GetPasswordResetTokenByHashForUpdate(txCtx, tokenHash)
+		if err != nil {
+			return apperror.Unauthenticated("invalid or expired password reset token")
+		}
+		if tok.UsedAt != nil || !tok.ExpiresAt.After(now) {
+			return apperror.Unauthenticated("invalid or expired password reset token")
+		}
+
+		user, err := s.repo.GetUserByIDForUpdate(txCtx, tok.UserID)
+		if err != nil || user.Status != domain.UserStatusActive {
+			return apperror.Unauthenticated("invalid or expired password reset token")
+		}
+
+		if err := s.repo.UpsertUserCredential(txCtx, user.ID, newHash, now); err != nil {
+			return err
+		}
+		if err := s.repo.MarkPasswordResetTokenUsed(txCtx, tok.ID, now); err != nil {
+			return err
+		}
+		if err := s.repo.InvalidateUnusedPasswordResetTokensByUser(txCtx, user.ID, now); err != nil {
+			return err
+		}
+		if err := s.repo.RevokeAllUserAuthSessions(txCtx, user.ID, now); err != nil {
+			return err
+		}
+		if err := s.repo.BumpUserAuthorizationVersion(txCtx, user.ID, now); err != nil {
+			return err
+		}
+
+		if s.audit != nil {
+			if err := s.audit.Record(txCtx, auditapp.AuditEntry{
+				ActorUserID:   &user.ID,
+				Action:        "identity.password_reset_confirmed",
+				ResourceType:  "user",
+				ResourceID:    &user.ID,
+				RequestID:     platformhttp.RequestIDUUIDFromContext(txCtx),
+				CorrelationID: platformhttp.CorrelationIDUUIDFromContext(txCtx),
+				IPHash:        auth.HashIdentifier(params.ClientIP),
+				Reason:        "password reset confirmed; all prior sessions revoked",
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
