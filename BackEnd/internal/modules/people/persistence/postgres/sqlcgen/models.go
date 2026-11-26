@@ -79,6 +79,24 @@ type Employee struct {
 	Version          int32      `json:"version"`
 }
 
+type HotelSetting struct {
+	ID                       bool        `json:"id"`
+	Name                     string      `json:"name"`
+	Address                  string      `json:"address"`
+	Phone                    string      `json:"phone"`
+	Email                    string      `json:"email"`
+	Timezone                 string      `json:"timezone"`
+	Currency                 string      `json:"currency"`
+	CheckInTime              pgtype.Time `json:"check_in_time"`
+	CheckOutTime             pgtype.Time `json:"check_out_time"`
+	IndividualHoldTtlMinutes int32       `json:"individual_hold_ttl_minutes"`
+	GroupHoldTtlMinutes      int32       `json:"group_hold_ttl_minutes"`
+	FreeCancelHours          int32       `json:"free_cancel_hours"`
+	LogoMediaID              *uuid.UUID  `json:"logo_media_id"`
+	UpdatedAt                time.Time   `json:"updated_at"`
+	Version                  int32       `json:"version"`
+}
+
 type OutboxEvent struct {
 	ID            uuid.UUID   `json:"id"`
 	AggregateType string      `json:"aggregate_type"`
@@ -158,4 +176,15 @@ type UserRole struct {
 	RoleID    uuid.UUID  `json:"role_id"`
 	GrantedBy *uuid.UUID `json:"granted_by"`
 	GrantedAt time.Time  `json:"granted_at"`
+}
+
+type VatRate struct {
+	ID        uuid.UUID      `json:"id"`
+	Code      string         `json:"code"`
+	Name      string         `json:"name"`
+	Rate      pgtype.Numeric `json:"rate"`
+	IsActive  bool           `json:"is_active"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	Version   int32          `json:"version"`
 }

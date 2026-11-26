@@ -111,7 +111,7 @@ flowchart LR
 
 | Trạng thái | Task | Nghiệp vụ | Phụ thuộc | Migration | Commit gợi ý |
 | :---: | :---: | --- | --- | :---: | --- |
-| [ ] | **T2.1** | Cấu hình khách sạn (TTL giữ phòng tùy chỉnh), VAT CRUD & Pricing Quote Helper | `T1.4`, `T0.5` | `000005` | `feat(pricing): add hotel settings with configurable hold ttl, vat rates crud and quote calculator` |
+| [x] | **T2.1** | Cấu hình khách sạn (TTL giữ phòng tùy chỉnh), VAT CRUD & Pricing Quote Helper | `T1.4`, `T0.5` | `000005` | `feat(pricing): add hotel settings with configurable hold ttl, vat rates crud and quote calculator` |
 | [ ] | **T2.2** | Loại phòng, Phòng vật lý, Staff CRUD (optimistic lock) & Catalogue công khai | `T2.1` | `000006` | `feat(property): add room types, physical rooms crud and public catalog search` |
 | [ ] | **T2.3** | Chuyển trạng thái vận hành phòng (`available`/`cleaning`/`maintenance`) & lịch sử | `T2.2` | — | `feat(property): add controlled room operational state and maintenance transitions` |
 | [ ] | **T2.4** | Danh mục dịch vụ khách sạn (CRUD & bảo vệ deactivate) | `T2.1` | `000007` | `feat(property): add service catalog crud and deactivation protection` |

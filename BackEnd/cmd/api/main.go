@@ -29,6 +29,12 @@ import (
 	peopleapp "github.com/trandinh0506/hotel-management/backend/internal/modules/people/application"
 	peoplehttp "github.com/trandinh0506/hotel-management/backend/internal/modules/people/delivery/http"
 	peoplepg "github.com/trandinh0506/hotel-management/backend/internal/modules/people/persistence/postgres"
+	pricingapp "github.com/trandinh0506/hotel-management/backend/internal/modules/pricing/application"
+	pricinghttp "github.com/trandinh0506/hotel-management/backend/internal/modules/pricing/delivery/http"
+	pricingpg "github.com/trandinh0506/hotel-management/backend/internal/modules/pricing/persistence/postgres"
+	propertyapp "github.com/trandinh0506/hotel-management/backend/internal/modules/property/application"
+	propertyhttp "github.com/trandinh0506/hotel-management/backend/internal/modules/property/delivery/http"
+	propertypg "github.com/trandinh0506/hotel-management/backend/internal/modules/property/persistence/postgres"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/auth"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/clock"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/config"
@@ -131,6 +137,8 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	rbacSvc := rbacapp.NewService(txRunner, rbacpg.NewRepository(pool), identitySvc, auditSvc, sysClock, idGen)
 	peopleSvc := peopleapp.NewService(txRunner, peoplepg.NewRepository(pool), identitySvc, rbacSvc, auditSvc, auditSvc, sysClock, idGen)
 	identitySvc.SetCustomerRegistrationHook(peopleSvc)
+	propertySvc := propertyapp.NewService(txRunner, propertypg.NewRepository(pool), rbacSvc, auditSvc, sysClock, idGen)
+	pricingSvc := pricingapp.NewService(txRunner, pricingpg.NewRepository(pool), propertySvc, rbacSvc, auditSvc, sysClock, idGen)
 
 	authMiddleware := auth.AuthenticatorMiddleware(tokenManager, identitySvc)
 	identityHandler := identityhttp.NewHandler(identityhttp.HandlerConfig{
@@ -140,6 +148,13 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	})
 	rbacHandler := rbachttp.NewHandler(rbacSvc)
 	peopleHandler := peoplehttp.NewHandler(peopleSvc, rbacSvc)
+	propertyHandler := propertyhttp.NewHandler(propertyhttp.HandlerConfig{
+		Service:    propertySvc,
+		Authorizer: rbacSvc,
+		Tokens:     tokenManager,
+		Verifier:   identitySvc,
+	})
+	pricingHandler := pricinghttp.NewHandler(pricingSvc, rbacSvc)
 
 	router := platformhttp.NewRouter(platformhttp.RouterConfig{
 		Logger:             logger,
@@ -151,6 +166,8 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		identityHandler.RegisterRoutes(api, authMiddleware)
 		rbacHandler.RegisterRoutes(api, authMiddleware)
 		peopleHandler.RegisterRoutes(api, authMiddleware)
+		propertyHandler.RegisterRoutes(api, authMiddleware)
+		pricingHandler.RegisterRoutes(api, authMiddleware)
 	})
 
 	srv := &http.Server{
