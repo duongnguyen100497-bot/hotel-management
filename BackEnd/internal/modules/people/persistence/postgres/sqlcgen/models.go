@@ -149,6 +149,49 @@ type RolePermission struct {
 	GrantedAt    time.Time  `json:"granted_at"`
 }
 
+type Room struct {
+	ID                uuid.UUID   `json:"id"`
+	Code              string      `json:"code"`
+	Name              string      `json:"name"`
+	RoomTypeID        uuid.UUID   `json:"room_type_id"`
+	Floor             int16       `json:"floor"`
+	Capacity          int16       `json:"capacity"`
+	OperationalStatus string      `json:"operational_status"`
+	Description       pgtype.Text `json:"description"`
+	ArchivedAt        *time.Time  `json:"archived_at"`
+	CreatedAt         time.Time   `json:"created_at"`
+	UpdatedAt         time.Time   `json:"updated_at"`
+	Version           int32       `json:"version"`
+}
+
+type RoomStateHistory struct {
+	ID          uuid.UUID   `json:"id"`
+	RoomID      uuid.UUID   `json:"room_id"`
+	FromStatus  string      `json:"from_status"`
+	ToStatus    string      `json:"to_status"`
+	Reason      pgtype.Text `json:"reason"`
+	ActorUserID *uuid.UUID  `json:"actor_user_id"`
+	OccurredAt  time.Time   `json:"occurred_at"`
+}
+
+type RoomType struct {
+	ID              uuid.UUID      `json:"id"`
+	Code            string         `json:"code"`
+	Name            string         `json:"name"`
+	Description     pgtype.Text    `json:"description"`
+	BaseNightlyRate pgtype.Numeric `json:"base_nightly_rate"`
+	Currency        string         `json:"currency"`
+	Capacity        int16          `json:"capacity"`
+	AreaSqm         pgtype.Numeric `json:"area_sqm"`
+	BedType         pgtype.Text    `json:"bed_type"`
+	Amenities       []byte         `json:"amenities"`
+	IsBookable      bool           `json:"is_bookable"`
+	ArchivedAt      *time.Time     `json:"archived_at"`
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+	Version         int32          `json:"version"`
+}
+
 type User struct {
 	ID                   uuid.UUID   `json:"id"`
 	Kind                 string      `json:"kind"`

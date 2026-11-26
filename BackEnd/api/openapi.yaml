@@ -854,6 +854,267 @@ paths:
                   data:
                     $ref: "#/components/schemas/VATRate"
 
+  /api/v1/catalog/room-types:
+    get:
+      summary: Search public bookable room types with price/capacity filters, sort, and cursor pagination
+      operationId: searchPublicRoomTypes
+      tags:
+        - Catalog
+      parameters:
+        - name: capacity
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+        - name: minPrice
+          in: query
+          schema:
+            type: string
+        - name: maxPrice
+          in: query
+          schema:
+            type: string
+        - name: checkIn
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: checkOut
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum:
+              - price_asc
+              - price_desc
+              - capacity_asc
+              - capacity_desc
+              - created_asc
+              - created_desc
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated public room types
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - data
+                  - page
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RoomType"
+                  page:
+                    $ref: "#/components/schemas/PageInfo"
+
+  /api/v1/catalog/room-types/{code}:
+    get:
+      summary: Get public bookable room type details by code
+      operationId: getPublicRoomTypeByCode
+      tags:
+        - Catalog
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Room type details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/RoomType"
+        "404":
+          description: Not found or not bookable
+
+  /api/v1/room-types:
+    get:
+      summary: List room types for staff/admin
+      operationId: listRoomTypes
+      tags:
+        - Property
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: includeArchived
+          in: query
+          schema:
+            type: boolean
+        - name: isBookable
+          in: query
+          schema:
+            type: boolean
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated room types
+    post:
+      summary: Create a room type (`room_type.manage`)
+      operationId: createRoomType
+      tags:
+        - Property
+      security:
+        - BearerAuth: []
+      responses:
+        "201":
+          description: Room type created
+        "409":
+          description: Duplicate code
+
+  /api/v1/room-types/{id}:
+    patch:
+      summary: Update room type with optimistic locking (`room_type.manage`)
+      operationId: updateRoomType
+      tags:
+        - Property
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: If-Match
+          in: header
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Room type updated
+        "409":
+          description: Version conflict
+
+  /api/v1/rooms:
+    get:
+      summary: List physical rooms (`property.read`)
+      operationId: listRooms
+      tags:
+        - Property
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: roomTypeId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: operationalStatus
+          in: query
+          schema:
+            type: string
+            enum:
+              - available
+              - occupied
+              - cleaning
+              - maintenance
+        - name: floor
+          in: query
+          schema:
+            type: integer
+        - name: includeArchived
+          in: query
+          schema:
+            type: boolean
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated physical rooms
+    post:
+      summary: Create a physical room (`room.create`)
+      operationId: createRoom
+      tags:
+        - Property
+      security:
+        - BearerAuth: []
+      responses:
+        "201":
+          description: Room created
+        "403":
+          description: Forbidden
+        "409":
+          description: Duplicate room code
+
+  /api/v1/rooms/{id}:
+    patch:
+      summary: Update physical room metadata with optimistic locking (`room.update` — never mutates operationalStatus)
+      operationId: updateRoom
+      tags:
+        - Property
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: If-Match
+          in: header
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Room updated
+        "409":
+          description: Version or code conflict
+
+  /api/v1/rooms/{id}/archive:
+    post:
+      summary: Soft-archive a physical room (`room.archive`, forbidden while occupied)
+      operationId: archiveRoom
+      tags:
+        - Property
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Room archived
+        "409":
+          description: Room is occupied or version conflict
+
 components:
   securitySchemes:
     BearerAuth:
@@ -1221,3 +1482,144 @@ components:
         version:
           type: integer
           minimum: 1
+
+    MediaItem:
+      type: object
+      required:
+        - mediaId
+        - url
+        - isCover
+        - sortOrder
+      properties:
+        mediaId:
+          type: string
+          format: uuid
+        url:
+          type: string
+        isCover:
+          type: boolean
+        sortOrder:
+          type: integer
+        mimeType:
+          type: string
+        width:
+          type: integer
+        height:
+          type: integer
+
+    RoomType:
+      type: object
+      required:
+        - id
+        - code
+        - name
+        - baseNightlyRate
+        - currency
+        - capacity
+        - amenities
+        - isBookable
+        - version
+      properties:
+        id:
+          type: string
+          format: uuid
+        code:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        baseNightlyRate:
+          type: string
+        currency:
+          type: string
+        capacity:
+          type: integer
+        areaSqm:
+          type: string
+        bedType:
+          type: string
+        amenities:
+          type: array
+          items:
+            type: string
+        isBookable:
+          type: boolean
+        operationalRoomCount:
+          type: integer
+        coverUrl:
+          type: string
+        media:
+          type: array
+          items:
+            $ref: "#/components/schemas/MediaItem"
+        archivedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        version:
+          type: integer
+
+    Room:
+      type: object
+      required:
+        - id
+        - code
+        - name
+        - roomTypeId
+        - floor
+        - capacity
+        - operationalStatus
+        - version
+      properties:
+        id:
+          type: string
+          format: uuid
+        code:
+          type: string
+        name:
+          type: string
+        roomTypeId:
+          type: string
+          format: uuid
+        roomTypeCode:
+          type: string
+        roomTypeName:
+          type: string
+        floor:
+          type: integer
+        capacity:
+          type: integer
+        operationalStatus:
+          type: string
+          enum:
+            - available
+            - occupied
+            - cleaning
+            - maintenance
+        description:
+          type: string
+        coverUrl:
+          type: string
+        media:
+          type: array
+          items:
+            $ref: "#/components/schemas/MediaItem"
+        archivedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        version:
+          type: integer

@@ -44,14 +44,27 @@ func NewHandler(cfg HandlerConfig) *Handler {
 
 // RegisterRoutes mounts public and authenticated property routes on api (/api/v1).
 func (h *Handler) RegisterRoutes(api *gin.RouterGroup, authMiddleware gin.HandlerFunc) {
-	// GET /hotel/settings supports both public read (basic fields) and staff read (hotel_settings.read -> full + version).
+	// Public endpoints
 	api.GET("/hotel/settings", h.handleGetHotelSettings)
+	api.GET("/catalog/room-types", h.handleSearchPublicCatalog)
+	api.GET("/catalog/room-types/:code", h.handleGetPublicRoomTypeByCode)
 
 	secured := api.Group("")
 	if authMiddleware != nil {
 		secured.Use(authMiddleware)
 	}
 	secured.PUT("/hotel/settings", rbacapp.RequirePermission(h.authorizer, "hotel_settings.update"), h.handleUpdateHotelSettings)
+
+	// Staff Room Types
+	secured.GET("/room-types", rbacapp.RequirePermission(h.authorizer, "property.read"), h.handleListRoomTypes)
+	secured.POST("/room-types", rbacapp.RequirePermission(h.authorizer, "room_type.manage"), h.handleCreateRoomType)
+	secured.PATCH("/room-types/:id", rbacapp.RequirePermission(h.authorizer, "room_type.manage"), h.handleUpdateRoomType)
+
+	// Staff Physical Rooms
+	secured.GET("/rooms", rbacapp.RequirePermission(h.authorizer, "property.read"), h.handleListRooms)
+	secured.POST("/rooms", rbacapp.RequirePermission(h.authorizer, "room.create"), h.handleCreateRoom)
+	secured.PATCH("/rooms/:id", rbacapp.RequirePermission(h.authorizer, "room.update"), h.handleUpdateRoom)
+	secured.POST("/rooms/:id/archive", rbacapp.RequirePermission(h.authorizer, "room.archive"), h.handleArchiveRoom)
 }
 
 type updateHotelSettingsRequest struct {

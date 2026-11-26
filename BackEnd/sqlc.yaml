@@ -142,7 +142,9 @@ sql:
               pointer: true
 
   - engine: "postgresql"
-    queries: "db/query/property.sql"
+    queries:
+      - "db/query/property.sql"
+      - "db/query/rooms.sql"
     schema: "db/migration"
     gen:
       go:

@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	auditapp "github.com/trandinh0506/hotel-management/backend/internal/modules/audit/application"
 	"github.com/trandinh0506/hotel-management/backend/internal/modules/property/domain"
+	propertypg "github.com/trandinh0506/hotel-management/backend/internal/modules/property/persistence/postgres"
 	rbacapp "github.com/trandinh0506/hotel-management/backend/internal/modules/rbac/application"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/apperror"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/auth"
@@ -21,12 +22,23 @@ type (
 	HotelSettings       = domain.HotelSettings
 	PublicHotelSettings = domain.PublicHotelSettings
 	MediaItem           = domain.MediaItem
+	RoomType            = domain.RoomType
+	Room                = domain.Room
 )
 
 // SettingsReader provides authoritative read access to single-hotel operational settings
 // (hold TTLs, free cancellation hours, currency, timezone) for pricing, booking, and reporting modules.
 type SettingsReader interface {
 	GetSettings(ctx context.Context) (HotelSettings, error)
+}
+
+// RoomCatalogReader provides authoritative read access to room types and physical rooms
+// for booking, stayops, media, and reporting modules.
+type RoomCatalogReader interface {
+	GetRoomTypeByID(ctx context.Context, id uuid.UUID) (RoomType, error)
+	GetPublicRoomTypeByCode(ctx context.Context, code string) (RoomType, error)
+	GetRoomByID(ctx context.Context, id uuid.UUID) (Room, error)
+	ListBookableRoomsByType(ctx context.Context, roomTypeID uuid.UUID) ([]Room, error)
 }
 
 // MediaResolver is an optional consumer-side port implemented by the media module (T2.5)
@@ -42,6 +54,22 @@ type Repository interface {
 	GetHotelSettings(ctx context.Context) (domain.HotelSettings, error)
 	GetHotelSettingsForUpdate(ctx context.Context) (domain.HotelSettings, error)
 	UpdateHotelSettings(ctx context.Context, settings domain.HotelSettings, expectedVersion int, now time.Time) (domain.HotelSettings, error)
+
+	CreateRoomType(ctx context.Context, rt domain.RoomType) (domain.RoomType, error)
+	GetRoomTypeByID(ctx context.Context, id uuid.UUID) (domain.RoomType, error)
+	GetRoomTypeByIDForUpdate(ctx context.Context, id uuid.UUID) (domain.RoomType, error)
+	GetPublicRoomTypeByCode(ctx context.Context, code string) (domain.RoomType, error)
+	UpdateRoomType(ctx context.Context, rt domain.RoomType, expectedVersion int, now time.Time) (domain.RoomType, error)
+	SearchPublicRoomTypes(ctx context.Context, q propertypg.PublicCatalogQuery) ([]domain.RoomType, *string, error)
+	ListStaffRoomTypes(ctx context.Context, q propertypg.StaffRoomTypeQuery) ([]domain.RoomType, *string, error)
+
+	CreateRoom(ctx context.Context, rm domain.Room) (domain.Room, error)
+	GetRoomByID(ctx context.Context, id uuid.UUID) (domain.Room, error)
+	GetRoomByIDForUpdate(ctx context.Context, id uuid.UUID) (domain.Room, error)
+	UpdateRoomMetadata(ctx context.Context, rm domain.Room, expectedVersion int, now time.Time) (domain.Room, error)
+	ArchiveRoom(ctx context.Context, id uuid.UUID, archivedAt time.Time) (domain.Room, error)
+	ListBookableRoomsByType(ctx context.Context, roomTypeID uuid.UUID) ([]domain.Room, error)
+	ListStaffRooms(ctx context.Context, q propertypg.StaffRoomQuery) ([]domain.Room, *string, error)
 }
 
 // UpdateSettingsParams defines inputs for PUT /api/v1/hotel/settings.
