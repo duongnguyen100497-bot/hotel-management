@@ -1115,6 +1115,95 @@ paths:
         "409":
           description: Room is occupied or version conflict
 
+  /api/v1/rooms/{id}/maintenance:
+    post:
+      summary: Enter or exit room maintenance state (`room.state.update`)
+      operationId: transitionRoomMaintenance
+      tags:
+        - Property
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - action
+              properties:
+                action:
+                  type: string
+                  enum:
+                    - enter
+                    - exit
+                reason:
+                  type: string
+                version:
+                  type: integer
+      responses:
+        "200":
+          description: Room state updated and history recorded
+        "409":
+          description: Illegal state transition (e.g. room is occupied)
+        "422":
+          description: Missing reason on enter
+
+  /api/v1/rooms/{id}/ready:
+    post:
+      summary: Transition room from cleaning or maintenance to available (`room.state.update`)
+      operationId: markRoomReady
+      tags:
+        - Property
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Room marked available
+        "409":
+          description: Room is occupied or already available
+
+  /api/v1/rooms/{id}/state-history:
+    get:
+      summary: List immutable operational state transition history for a room (`property.read`)
+      operationId: listRoomStateHistory
+      tags:
+        - Property
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated room state history
+
 components:
   securitySchemes:
     BearerAuth:

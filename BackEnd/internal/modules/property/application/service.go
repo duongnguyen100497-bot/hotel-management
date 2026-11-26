@@ -67,9 +67,14 @@ type Repository interface {
 	GetRoomByID(ctx context.Context, id uuid.UUID) (domain.Room, error)
 	GetRoomByIDForUpdate(ctx context.Context, id uuid.UUID) (domain.Room, error)
 	UpdateRoomMetadata(ctx context.Context, rm domain.Room, expectedVersion int, now time.Time) (domain.Room, error)
+	UpdateRoomOperationalStatus(ctx context.Context, roomID uuid.UUID, targetStatus string, expectedVersion int, now time.Time) (domain.Room, error)
 	ArchiveRoom(ctx context.Context, id uuid.UUID, archivedAt time.Time) (domain.Room, error)
 	ListBookableRoomsByType(ctx context.Context, roomTypeID uuid.UUID) ([]domain.Room, error)
 	ListStaffRooms(ctx context.Context, q propertypg.StaffRoomQuery) ([]domain.Room, *string, error)
+
+	InsertRoomStateHistory(ctx context.Context, entry domain.RoomStateHistoryEntry) (domain.RoomStateHistoryEntry, error)
+	ListRoomStateHistory(ctx context.Context, roomID uuid.UUID, cursor string, limit int) ([]domain.RoomStateHistoryEntry, *string, error)
+	CountOperationalRoomsAt(ctx context.Context, snapshotAt time.Time) (totalActive int, maintenance int, operational int, err error)
 }
 
 // UpdateSettingsParams defines inputs for PUT /api/v1/hotel/settings.
