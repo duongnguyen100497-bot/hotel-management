@@ -24,6 +24,7 @@ type (
 	MediaItem           = domain.MediaItem
 	RoomType            = domain.RoomType
 	Room                = domain.Room
+	ServiceCatalogItem  = domain.ServiceCatalogItem
 )
 
 // SettingsReader provides authoritative read access to single-hotel operational settings
@@ -75,6 +76,13 @@ type Repository interface {
 	InsertRoomStateHistory(ctx context.Context, entry domain.RoomStateHistoryEntry) (domain.RoomStateHistoryEntry, error)
 	ListRoomStateHistory(ctx context.Context, roomID uuid.UUID, cursor string, limit int) ([]domain.RoomStateHistoryEntry, *string, error)
 	CountOperationalRoomsAt(ctx context.Context, snapshotAt time.Time) (totalActive int, maintenance int, operational int, err error)
+
+	CreateServiceCatalogItem(ctx context.Context, item domain.ServiceCatalogItem) (domain.ServiceCatalogItem, error)
+	GetServiceCatalogItemByID(ctx context.Context, id uuid.UUID) (domain.ServiceCatalogItem, error)
+	GetServiceCatalogItemByIDForUpdate(ctx context.Context, id uuid.UUID) (domain.ServiceCatalogItem, error)
+	UpdateServiceCatalogItem(ctx context.Context, item domain.ServiceCatalogItem, expectedVersion int, now time.Time) (domain.ServiceCatalogItem, error)
+	DeactivateServiceCatalogItem(ctx context.Context, id uuid.UUID, now time.Time) (domain.ServiceCatalogItem, error)
+	ListServiceCatalogItems(ctx context.Context, q propertypg.ServiceCatalogListQuery) ([]domain.ServiceCatalogItem, *string, error)
 }
 
 // UpdateSettingsParams defines inputs for PUT /api/v1/hotel/settings.

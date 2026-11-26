@@ -192,6 +192,20 @@ type RoomType struct {
 	Version         int32          `json:"version"`
 }
 
+type ServiceCatalog struct {
+	ID          uuid.UUID      `json:"id"`
+	Code        string         `json:"code"`
+	Name        string         `json:"name"`
+	Category    string         `json:"category"`
+	UnitPrice   pgtype.Numeric `json:"unit_price"`
+	Currency    string         `json:"currency"`
+	Description pgtype.Text    `json:"description"`
+	IsActive    bool           `json:"is_active"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	Version     int32          `json:"version"`
+}
+
 type User struct {
 	ID                   uuid.UUID   `json:"id"`
 	Kind                 string      `json:"kind"`

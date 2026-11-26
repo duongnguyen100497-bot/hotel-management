@@ -145,6 +145,7 @@ sql:
     queries:
       - "db/query/property.sql"
       - "db/query/rooms.sql"
+      - "db/query/service_catalog.sql"
     schema: "db/migration"
     gen:
       go:

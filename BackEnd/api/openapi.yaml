@@ -1204,6 +1204,93 @@ paths:
         "200":
           description: Paginated room state history
 
+  /api/v1/services:
+    get:
+      summary: List ancillary hotel services with category/isActive filters (`service.read`)
+      operationId: listServices
+      tags:
+        - Services
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: category
+          in: query
+          schema:
+            type: string
+        - name: isActive
+          in: query
+          schema:
+            type: boolean
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated service catalog items
+    post:
+      summary: Create an ancillary hotel service (`service.manage`, VAT-exclusive unitPrice)
+      operationId: createService
+      tags:
+        - Services
+      security:
+        - BearerAuth: []
+      responses:
+        "201":
+          description: Service created
+        "403":
+          description: Forbidden
+        "409":
+          description: Duplicate service code
+
+  /api/v1/services/{id}:
+    patch:
+      summary: Update an ancillary hotel service with optimistic locking (`service.manage`)
+      operationId: updateService
+      tags:
+        - Services
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: If-Match
+          in: header
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Service updated
+        "409":
+          description: Version conflict
+
+  /api/v1/services/{id}/deactivate:
+    post:
+      summary: Deactivate a service item (`service.manage`) without deleting historical consumption snapshots
+      operationId: deactivateService
+      tags:
+        - Services
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Service deactivated
+
 components:
   securitySchemes:
     BearerAuth:

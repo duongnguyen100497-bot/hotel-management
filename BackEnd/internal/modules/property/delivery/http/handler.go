@@ -68,6 +68,12 @@ func (h *Handler) RegisterRoutes(api *gin.RouterGroup, authMiddleware gin.Handle
 	secured.POST("/rooms/:id/maintenance", rbacapp.RequirePermission(h.authorizer, "room.state.update"), h.handleRoomMaintenance)
 	secured.POST("/rooms/:id/ready", rbacapp.RequirePermission(h.authorizer, "room.state.update"), h.handleRoomReady)
 	secured.GET("/rooms/:id/state-history", rbacapp.RequirePermission(h.authorizer, "property.read"), h.handleListRoomStateHistory)
+
+	// Ancillary Service Catalog
+	secured.GET("/services", rbacapp.RequirePermission(h.authorizer, "service.read"), h.handleListServices)
+	secured.POST("/services", rbacapp.RequirePermission(h.authorizer, "service.manage"), h.handleCreateService)
+	secured.PATCH("/services/:id", rbacapp.RequirePermission(h.authorizer, "service.manage"), h.handleUpdateService)
+	secured.POST("/services/:id/deactivate", rbacapp.RequirePermission(h.authorizer, "service.manage"), h.handleDeactivateService)
 }
 
 type updateHotelSettingsRequest struct {
