@@ -22,10 +22,10 @@ import (
 	identityapp "github.com/trandinh0506/hotel-management/backend/internal/modules/identity/application"
 	identityhttp "github.com/trandinh0506/hotel-management/backend/internal/modules/identity/delivery/http"
 	identitypg "github.com/trandinh0506/hotel-management/backend/internal/modules/identity/persistence/postgres"
+	mediaapp "github.com/trandinh0506/hotel-management/backend/internal/modules/media/application"
+	mediahttp "github.com/trandinh0506/hotel-management/backend/internal/modules/media/delivery/http"
+	mediapg "github.com/trandinh0506/hotel-management/backend/internal/modules/media/persistence/postgres"
 	"github.com/trandinh0506/hotel-management/backend/internal/modules/notification"
-	rbacapp "github.com/trandinh0506/hotel-management/backend/internal/modules/rbac/application"
-	rbachttp "github.com/trandinh0506/hotel-management/backend/internal/modules/rbac/delivery/http"
-	rbacpg "github.com/trandinh0506/hotel-management/backend/internal/modules/rbac/persistence/postgres"
 	peopleapp "github.com/trandinh0506/hotel-management/backend/internal/modules/people/application"
 	peoplehttp "github.com/trandinh0506/hotel-management/backend/internal/modules/people/delivery/http"
 	peoplepg "github.com/trandinh0506/hotel-management/backend/internal/modules/people/persistence/postgres"
@@ -35,6 +35,9 @@ import (
 	propertyapp "github.com/trandinh0506/hotel-management/backend/internal/modules/property/application"
 	propertyhttp "github.com/trandinh0506/hotel-management/backend/internal/modules/property/delivery/http"
 	propertypg "github.com/trandinh0506/hotel-management/backend/internal/modules/property/persistence/postgres"
+	rbacapp "github.com/trandinh0506/hotel-management/backend/internal/modules/rbac/application"
+	rbachttp "github.com/trandinh0506/hotel-management/backend/internal/modules/rbac/delivery/http"
+	rbacpg "github.com/trandinh0506/hotel-management/backend/internal/modules/rbac/persistence/postgres"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/auth"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/clock"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/config"
@@ -42,6 +45,7 @@ import (
 	platformhttp "github.com/trandinh0506/hotel-management/backend/internal/platform/http"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/id"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/logging"
+	platformminio "github.com/trandinh0506/hotel-management/backend/internal/platform/minio"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/smtp"
 )
 
@@ -130,6 +134,22 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		})
 	}
 
+	var minioStorage platformminio.Storage
+	if cfg.MinIOEnabled {
+		mc, err := platformminio.NewClient(platformminio.Config{
+			Endpoint:      cfg.MinIOEndpoint,
+			AccessKey:     cfg.MinIOAccessKey,
+			SecretKey:     cfg.MinIOSecretKey,
+			Bucket:        cfg.MinIOBucket,
+			UseSSL:        cfg.MinIOUseSSL,
+			PublicBaseURL: cfg.MinIOPublicBaseURL,
+		})
+		if err != nil {
+			return fmt.Errorf("init minio client: %w", err)
+		}
+		minioStorage = mc
+	}
+
 	tokenManager := auth.NewTokenManager(cfg.JWTAccessSecret, cfg.JWTAccessTTL, cfg.JWTRefreshTTL, sysClock)
 	identitySvc := identityapp.NewService(txRunner, identitypg.NewRepository(pool), auditSvc, auditSvc, sysClock, idGen).
 		WithTokenManager(tokenManager).
@@ -139,6 +159,17 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	identitySvc.SetCustomerRegistrationHook(peopleSvc)
 	propertySvc := propertyapp.NewService(txRunner, propertypg.NewRepository(pool), rbacSvc, auditSvc, sysClock, idGen)
 	pricingSvc := pricingapp.NewService(txRunner, pricingpg.NewRepository(pool), propertySvc, rbacSvc, auditSvc, sysClock, idGen)
+	mediaSvc := mediaapp.NewService(txRunner, mediapg.NewRepository(pool), minioStorage, propertySvc, rbacSvc, auditSvc, auditSvc, sysClock, idGen).
+		WithUploadMaxBytes(cfg.UploadMaxBytes).
+		WithLogger(logger)
+	propertySvc.SetMediaResolver(mediaSvc)
+	outboxWorker.Register(mediaapp.EventMediaObjectDeleteRequested, mediaSvc.HandleObjectDeleteRequested)
+
+	workerWG.Add(1)
+	go func() {
+		defer workerWG.Done()
+		mediaSvc.RunCleanupWorker(workerCtx, 15*time.Minute)
+	}()
 
 	authMiddleware := auth.AuthenticatorMiddleware(tokenManager, identitySvc)
 	identityHandler := identityhttp.NewHandler(identityhttp.HandlerConfig{
@@ -155,6 +186,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		Verifier:   identitySvc,
 	})
 	pricingHandler := pricinghttp.NewHandler(pricingSvc, rbacSvc)
+	mediaHandler := mediahttp.NewHandler(mediaSvc, rbacSvc)
 
 	router := platformhttp.NewRouter(platformhttp.RouterConfig{
 		Logger:             logger,
@@ -168,6 +200,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		peopleHandler.RegisterRoutes(api, authMiddleware)
 		propertyHandler.RegisterRoutes(api, authMiddleware)
 		pricingHandler.RegisterRoutes(api, authMiddleware)
+		mediaHandler.RegisterRoutes(api, authMiddleware)
 	})
 
 	srv := &http.Server{

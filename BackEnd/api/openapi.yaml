@@ -1291,6 +1291,207 @@ paths:
         "200":
           description: Service deactivated
 
+  /api/v1/media/uploads:
+    post:
+      summary: Request a short-lived presigned PUT URL for uploading an image to MinIO (`media.manage`)
+      operationId: requestMediaUpload
+      tags:
+        - Media
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RequestMediaUploadRequest"
+      responses:
+        "201":
+          description: Presigned upload ticket issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/UploadTicket"
+        "403":
+          description: Forbidden
+        "422":
+          description: Disallowed declared content type or invalid file name
+
+  /api/v1/media/{id}/complete:
+    post:
+      summary: Inspect uploaded MinIO object magic bytes and bitmap dimensions, mark ready, and optionally link to room/roomType (`media.manage`)
+      operationId: completeMediaUpload
+      tags:
+        - Media
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompleteMediaUploadRequest"
+      responses:
+        "200":
+          description: Media asset validated and marked ready
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/MediaAsset"
+        "422":
+          description: Magic-byte mismatch, corrupt bitmap, SVG/HTML/executable payload, or exceeds UPLOAD_MAX_BYTES
+
+  /api/v1/media/{id}:
+    delete:
+      summary: Unlink media asset, mark deletion_pending, and enqueue MinIO object removal via transactional outbox (`media.manage`)
+      operationId: deleteMediaAsset
+      tags:
+        - Media
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Media deletion scheduled
+
+  /api/v1/rooms/{id}/media:
+    post:
+      summary: Link a ready media asset to a physical room (`media.manage`)
+      operationId: linkRoomMedia
+      tags:
+        - Media
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LinkRoomMediaRequest"
+      responses:
+        "201":
+          description: Room media linked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/RoomMediaLink"
+
+  /api/v1/rooms/{id}/media/{mediaId}:
+    patch:
+      summary: Update sort order or cover flag for a linked room media asset (`media.manage`)
+      operationId: updateRoomMedia
+      tags:
+        - Media
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: mediaId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRoomMediaRequest"
+      responses:
+        "200":
+          description: Room media link updated
+
+  /api/v1/room-types/{id}/media:
+    post:
+      summary: Link a ready media asset to a room type (`media.manage`)
+      operationId: linkRoomTypeMedia
+      tags:
+        - Media
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LinkRoomMediaRequest"
+      responses:
+        "201":
+          description: Room type media linked
+
+  /api/v1/room-types/{id}/media/{mediaId}:
+    patch:
+      summary: Update sort order or cover flag for a linked room type media asset (`media.manage`)
+      operationId: updateRoomTypeMedia
+      tags:
+        - Media
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: mediaId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRoomMediaRequest"
+      responses:
+        "200":
+          description: Room type media link updated
+
 components:
   securitySchemes:
     BearerAuth:
@@ -1799,3 +2000,148 @@ components:
           format: date-time
         version:
           type: integer
+
+    RequestMediaUploadRequest:
+      type: object
+      required:
+        - fileName
+        - contentType
+      properties:
+        fileName:
+          type: string
+          maxLength: 255
+        contentType:
+          type: string
+          enum:
+            - image/jpeg
+            - image/png
+            - image/webp
+
+    UploadTicket:
+      type: object
+      required:
+        - mediaId
+        - uploadUrl
+        - contentType
+        - maxBytes
+        - expiresAt
+      properties:
+        mediaId:
+          type: string
+          format: uuid
+        uploadUrl:
+          type: string
+          format: uri
+        contentType:
+          type: string
+        maxBytes:
+          type: integer
+        expiresAt:
+          type: string
+          format: date-time
+
+    CompleteMediaUploadRequest:
+      type: object
+      properties:
+        roomId:
+          type: string
+          format: uuid
+        roomTypeId:
+          type: string
+          format: uuid
+        sortOrder:
+          type: integer
+        isCover:
+          type: boolean
+
+    MediaAsset:
+      type: object
+      required:
+        - id
+        - status
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        sha256:
+          type: string
+        mimeType:
+          type: string
+        byteSize:
+          type: integer
+        width:
+          type: integer
+        height:
+          type: integer
+        status:
+          type: string
+          enum:
+            - pending
+            - ready
+            - deletion_pending
+            - deleted
+        url:
+          type: string
+        uploadedBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    LinkRoomMediaRequest:
+      type: object
+      required:
+        - mediaId
+      properties:
+        mediaId:
+          type: string
+          format: uuid
+        sortOrder:
+          type: integer
+        isCover:
+          type: boolean
+
+    UpdateRoomMediaRequest:
+      type: object
+      properties:
+        sortOrder:
+          type: integer
+        isCover:
+          type: boolean
+
+    RoomMediaLink:
+      type: object
+      required:
+        - id
+        - mediaId
+        - sortOrder
+        - isCover
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        roomId:
+          type: string
+          format: uuid
+        roomTypeId:
+          type: string
+          format: uuid
+        mediaId:
+          type: string
+          format: uuid
+        sortOrder:
+          type: integer
+        isCover:
+          type: boolean
+        url:
+          type: string
+        createdAt:
+          type: string
+          format: date-time

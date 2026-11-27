@@ -98,6 +98,20 @@ type HotelSetting struct {
 	Version                  int32       `json:"version"`
 }
 
+type MediaAsset struct {
+	ID         uuid.UUID   `json:"id"`
+	ObjectKey  string      `json:"object_key"`
+	Sha256     []byte      `json:"sha256"`
+	MimeType   pgtype.Text `json:"mime_type"`
+	ByteSize   pgtype.Int8 `json:"byte_size"`
+	Width      pgtype.Int4 `json:"width"`
+	Height     pgtype.Int4 `json:"height"`
+	Status     string      `json:"status"`
+	UploadedBy *uuid.UUID  `json:"uploaded_by"`
+	CreatedAt  time.Time   `json:"created_at"`
+	UpdatedAt  time.Time   `json:"updated_at"`
+}
+
 type OutboxEvent struct {
 	ID            uuid.UUID   `json:"id"`
 	AggregateType string      `json:"aggregate_type"`
@@ -163,6 +177,16 @@ type Room struct {
 	CreatedAt         time.Time   `json:"created_at"`
 	UpdatedAt         time.Time   `json:"updated_at"`
 	Version           int32       `json:"version"`
+}
+
+type RoomMedium struct {
+	ID           uuid.UUID  `json:"id"`
+	RoomID       *uuid.UUID `json:"room_id"`
+	RoomTypeID   *uuid.UUID `json:"room_type_id"`
+	MediaAssetID uuid.UUID  `json:"media_asset_id"`
+	SortOrder    int16      `json:"sort_order"`
+	IsCover      bool       `json:"is_cover"`
+	CreatedAt    time.Time  `json:"created_at"`
 }
 
 type RoomStateHistory struct {
