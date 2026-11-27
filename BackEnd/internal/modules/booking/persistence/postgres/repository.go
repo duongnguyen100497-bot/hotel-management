@@ -494,6 +494,102 @@ func (r *Repository) ListBookingsByGroupID(ctx context.Context, groupID uuid.UUI
 	return out, nil
 }
 
+// InsertBookingGroup inserts a new booking_groups aggregate row.
+func (r *Repository) InsertBookingGroup(ctx context.Context, g domain.BookingGroup) (domain.BookingGroup, error) {
+	row, err := r.queries(ctx).InsertBookingGroup(ctx, sqlcgen.InsertBookingGroupParams{
+		ID:             g.ID,
+		ReferenceCode:  g.ReferenceCode,
+		CustomerID:     g.CustomerID,
+		Status:         string(g.Status),
+		ExpiresAt:      g.ExpiresAt,
+		IdempotencyKey: toPgText(g.IdempotencyKey),
+		CreatedAt:      g.CreatedAt,
+	})
+	if err != nil {
+		return domain.BookingGroup{}, db.MapPgError(err)
+	}
+	return mapBookingGroupRow(row), nil
+}
+
+// GetBookingGroupByID returns a booking group header by ID.
+func (r *Repository) GetBookingGroupByID(ctx context.Context, id uuid.UUID) (domain.BookingGroup, error) {
+	row, err := r.queries(ctx).GetBookingGroupByID(ctx, id)
+	if err != nil {
+		return domain.BookingGroup{}, db.MapPgError(err)
+	}
+	return mapBookingGroupRow(row), nil
+}
+
+// FindBookingGroupByCustomerIdempotencyKey returns (nil, nil) if not found.
+func (r *Repository) FindBookingGroupByCustomerIdempotencyKey(ctx context.Context, customerID uuid.UUID, key string) (*domain.BookingGroup, error) {
+	if key == "" {
+		return nil, nil
+	}
+	row, err := r.queries(ctx).GetBookingGroupByCustomerIdempotencyKey(ctx, sqlcgen.GetBookingGroupByCustomerIdempotencyKeyParams{
+		CustomerID:     customerID,
+		IdempotencyKey: toPgText(key),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, db.MapPgError(err)
+	}
+	g := mapBookingGroupRow(row)
+	return &g, nil
+}
+
+// ListBookingGroupsByCustomer lists booking groups owned by customerID with cursor pagination.
+func (r *Repository) ListBookingGroupsByCustomer(ctx context.Context, customerID uuid.UUID, cursor string, limit int) ([]domain.BookingGroup, *string, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	cursorTime, cursorID, err := decodeTimeIDCursor(cursor)
+	if err != nil {
+		return nil, nil, err
+	}
+	var cursorIDPtr *uuid.UUID
+	if cursorID != uuid.Nil {
+		idCopy := cursorID
+		cursorIDPtr = &idCopy
+	}
+	rows, err := r.queries(ctx).ListBookingGroupsByCustomer(ctx, sqlcgen.ListBookingGroupsByCustomerParams{
+		CustomerID:      customerID,
+		CursorCreatedAt: cursorTime,
+		CursorID:        cursorIDPtr,
+		LimitRows:       int32(limit + 1),
+	})
+	if err != nil {
+		return nil, nil, db.MapPgError(err)
+	}
+	var nextCursor *string
+	if len(rows) > limit {
+		rows = rows[:limit]
+		last := rows[len(rows)-1]
+		nc := encodeTimeIDCursor(last.CreatedAt, last.ID)
+		nextCursor = &nc
+	}
+	out := make([]domain.BookingGroup, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, mapBookingGroupRow(row))
+	}
+	return out, nextCursor, nil
+}
+
+func mapBookingGroupRow(row sqlcgen.BookingGroup) domain.BookingGroup {
+	return domain.BookingGroup{
+		ID:             row.ID,
+		ReferenceCode:  row.ReferenceCode,
+		CustomerID:     row.CustomerID,
+		Status:         domain.GroupStatus(row.Status),
+		ExpiresAt:      row.ExpiresAt,
+		IdempotencyKey: fromPgText(row.IdempotencyKey),
+		CreatedAt:      row.CreatedAt,
+		UpdatedAt:      row.UpdatedAt,
+		Version:        int(row.Version),
+	}
+}
+
 func mapHoldRow(
 	id, customerID uuid.UUID,
 	groupID *uuid.UUID,

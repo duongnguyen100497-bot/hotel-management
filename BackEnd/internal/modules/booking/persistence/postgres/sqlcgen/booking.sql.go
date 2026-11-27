@@ -495,6 +495,58 @@ func (q *Queries) GetBookingByIDForUpdate(ctx context.Context, id uuid.UUID) (Ge
 	return i, err
 }
 
+const getBookingGroupByCustomerIdempotencyKey = `-- name: GetBookingGroupByCustomerIdempotencyKey :one
+SELECT id, reference_code, customer_id, status, expires_at, idempotency_key, created_at, updated_at, version
+FROM booking_groups
+WHERE customer_id = $1
+  AND idempotency_key = $2
+`
+
+type GetBookingGroupByCustomerIdempotencyKeyParams struct {
+	CustomerID     uuid.UUID   `json:"customer_id"`
+	IdempotencyKey pgtype.Text `json:"idempotency_key"`
+}
+
+func (q *Queries) GetBookingGroupByCustomerIdempotencyKey(ctx context.Context, arg GetBookingGroupByCustomerIdempotencyKeyParams) (BookingGroup, error) {
+	row := q.db.QueryRow(ctx, getBookingGroupByCustomerIdempotencyKey, arg.CustomerID, arg.IdempotencyKey)
+	var i BookingGroup
+	err := row.Scan(
+		&i.ID,
+		&i.ReferenceCode,
+		&i.CustomerID,
+		&i.Status,
+		&i.ExpiresAt,
+		&i.IdempotencyKey,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Version,
+	)
+	return i, err
+}
+
+const getBookingGroupByID = `-- name: GetBookingGroupByID :one
+SELECT id, reference_code, customer_id, status, expires_at, idempotency_key, created_at, updated_at, version
+FROM booking_groups
+WHERE id = $1
+`
+
+func (q *Queries) GetBookingGroupByID(ctx context.Context, id uuid.UUID) (BookingGroup, error) {
+	row := q.db.QueryRow(ctx, getBookingGroupByID, id)
+	var i BookingGroup
+	err := row.Scan(
+		&i.ID,
+		&i.ReferenceCode,
+		&i.CustomerID,
+		&i.Status,
+		&i.ExpiresAt,
+		&i.IdempotencyKey,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Version,
+	)
+	return i, err
+}
+
 const getReservationHoldByIDForUpdate = `-- name: GetReservationHoldByIDForUpdate :one
 SELECT
     id, customer_id, booking_group_id, room_id, room_type_id,
@@ -692,6 +744,50 @@ func (q *Queries) InsertBooking(ctx context.Context, arg InsertBookingParams) (I
 		&i.ExpiresAt,
 		&i.CancelledAt,
 		&i.CancelReason,
+		&i.IdempotencyKey,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Version,
+	)
+	return i, err
+}
+
+const insertBookingGroup = `-- name: InsertBookingGroup :one
+INSERT INTO booking_groups (
+    id, reference_code, customer_id, status, expires_at, idempotency_key, created_at, updated_at
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $7
+)
+RETURNING id, reference_code, customer_id, status, expires_at, idempotency_key, created_at, updated_at, version
+`
+
+type InsertBookingGroupParams struct {
+	ID             uuid.UUID   `json:"id"`
+	ReferenceCode  string      `json:"reference_code"`
+	CustomerID     uuid.UUID   `json:"customer_id"`
+	Status         string      `json:"status"`
+	ExpiresAt      *time.Time  `json:"expires_at"`
+	IdempotencyKey pgtype.Text `json:"idempotency_key"`
+	CreatedAt      time.Time   `json:"created_at"`
+}
+
+func (q *Queries) InsertBookingGroup(ctx context.Context, arg InsertBookingGroupParams) (BookingGroup, error) {
+	row := q.db.QueryRow(ctx, insertBookingGroup,
+		arg.ID,
+		arg.ReferenceCode,
+		arg.CustomerID,
+		arg.Status,
+		arg.ExpiresAt,
+		arg.IdempotencyKey,
+		arg.CreatedAt,
+	)
+	var i BookingGroup
+	err := row.Scan(
+		&i.ID,
+		&i.ReferenceCode,
+		&i.CustomerID,
+		&i.Status,
+		&i.ExpiresAt,
 		&i.IdempotencyKey,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -924,6 +1020,57 @@ func (q *Queries) ListActiveNonExpiredHolds(ctx context.Context, expiresAt time.
 			&i.ReleasedReason,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listBookingGroupsByCustomer = `-- name: ListBookingGroupsByCustomer :many
+SELECT id, reference_code, customer_id, status, expires_at, idempotency_key, created_at, updated_at, version
+FROM booking_groups
+WHERE customer_id = $1
+  AND ($2::timestamptz IS NULL OR (created_at, id) < ($2::timestamptz, $3::uuid))
+ORDER BY created_at DESC, id DESC
+LIMIT $4
+`
+
+type ListBookingGroupsByCustomerParams struct {
+	CustomerID      uuid.UUID  `json:"customer_id"`
+	CursorCreatedAt *time.Time `json:"cursor_created_at"`
+	CursorID        *uuid.UUID `json:"cursor_id"`
+	LimitRows       int32      `json:"limit_rows"`
+}
+
+func (q *Queries) ListBookingGroupsByCustomer(ctx context.Context, arg ListBookingGroupsByCustomerParams) ([]BookingGroup, error) {
+	rows, err := q.db.Query(ctx, listBookingGroupsByCustomer,
+		arg.CustomerID,
+		arg.CursorCreatedAt,
+		arg.CursorID,
+		arg.LimitRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []BookingGroup{}
+	for rows.Next() {
+		var i BookingGroup
+		if err := rows.Scan(
+			&i.ID,
+			&i.ReferenceCode,
+			&i.CustomerID,
+			&i.Status,
+			&i.ExpiresAt,
+			&i.IdempotencyKey,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Version,
 		); err != nil {
 			return nil, err
 		}

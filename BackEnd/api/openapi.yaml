@@ -1653,6 +1653,59 @@ paths:
         "200":
           description: Booking confirmed
 
+  /api/v1/booking-groups:
+    post:
+      summary: Create a multi-room booking group aggregate atomically from a group hold
+      operationId: createBookingGroup
+      tags:
+        - Booking
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        "201":
+          description: Booking group created
+        "200":
+          description: Idempotent replay of existing booking group
+        "409":
+          description: Hold expired or room overlap conflict (rolled back atomically)
+
+  /api/v1/booking-groups/{id}:
+    get:
+      summary: Get booking group aggregate with totals and child bookings
+      operationId: getBookingGroup
+      tags:
+        - Booking
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Booking group detail
+
+  /api/v1/me/booking-groups:
+    get:
+      summary: List authenticated customer's own booking groups
+      operationId: listMyBookingGroups
+      tags:
+        - Booking
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Paginated list of customer booking groups
+
 components:
   securitySchemes:
     BearerAuth:

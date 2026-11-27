@@ -318,3 +318,30 @@ WHERE room_id = $1
   AND status = 'converted'
 ORDER BY created_at DESC
 LIMIT 5;
+
+-- name: InsertBookingGroup :one
+INSERT INTO booking_groups (
+    id, reference_code, customer_id, status, expires_at, idempotency_key, created_at, updated_at
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $7
+)
+RETURNING id, reference_code, customer_id, status, expires_at, idempotency_key, created_at, updated_at, version;
+
+-- name: GetBookingGroupByID :one
+SELECT id, reference_code, customer_id, status, expires_at, idempotency_key, created_at, updated_at, version
+FROM booking_groups
+WHERE id = $1;
+
+-- name: GetBookingGroupByCustomerIdempotencyKey :one
+SELECT id, reference_code, customer_id, status, expires_at, idempotency_key, created_at, updated_at, version
+FROM booking_groups
+WHERE customer_id = $1
+  AND idempotency_key = $2;
+
+-- name: ListBookingGroupsByCustomer :many
+SELECT id, reference_code, customer_id, status, expires_at, idempotency_key, created_at, updated_at, version
+FROM booking_groups
+WHERE customer_id = $1
+  AND (sqlc.narg('cursor_created_at')::timestamptz IS NULL OR (created_at, id) < (sqlc.narg('cursor_created_at')::timestamptz, sqlc.narg('cursor_id')::uuid))
+ORDER BY created_at DESC, id DESC
+LIMIT sqlc.arg('limit_rows');

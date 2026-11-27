@@ -46,6 +46,11 @@ func (h *Handler) RegisterRoutes(api *gin.RouterGroup, authMiddleware gin.Handle
 	secured.GET("/me/bookings", h.handleListMyBookings)
 	secured.GET("/bookings/:id", h.handleGetBooking)
 	secured.POST("/bookings/:id/confirm", rbacapp.RequirePermission(h.authorizer, "booking.confirm"), h.handleConfirmBooking)
+
+	// Group bookings
+	secured.POST("/booking-groups", h.handleCreateBookingGroup)
+	secured.GET("/booking-groups/:id", h.handleGetBookingGroup)
+	secured.GET("/me/booking-groups", h.handleListMyBookingGroups)
 }
 
 type availabilityQuoteRequest struct {
@@ -321,4 +326,89 @@ func (h *Handler) handleConfirmBooking(c *gin.Context) {
 		return
 	}
 	platformhttp.WriteJSON(c, http.StatusOK, gin.H{"data": b})
+}
+
+type createBookingGroupRequest struct {
+	CustomerID          *uuid.UUID                  `json:"customerId,omitempty"`
+	GroupHoldID         uuid.UUID                   `json:"groupHoldId"`
+	HoldToken           string                      `json:"holdToken"`
+	Adults              int                         `json:"adults,omitempty"`
+	Children            int                         `json:"children,omitempty"`
+	SpecialRequest      string                      `json:"specialRequest,omitempty"`
+	RepresentativeGuest *bookingapp.GuestSnapshot   `json:"representativeGuest,omitempty"`
+	RoomGuests          []bookingapp.RoomGuestInput `json:"roomGuests,omitempty"`
+}
+
+func (h *Handler) handleCreateBookingGroup(c *gin.Context) {
+	principal, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		platformhttp.WriteError(c, apperror.Unauthenticated("authentication required"))
+		return
+	}
+	var req createBookingGroupRequest
+	if err := platformhttp.DecodeJSON(c, &req); err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	grp, replayed, err := h.svc.CreateBookingGroup(c.Request.Context(), principal, bookingapp.CreateBookingGroupParams{
+		IdempotencyKey:      platformhttp.IdempotencyKey(c),
+		CustomerID:          req.CustomerID,
+		GroupHoldID:         req.GroupHoldID,
+		HoldToken:           req.HoldToken,
+		Adults:              req.Adults,
+		Children:            req.Children,
+		SpecialRequest:      req.SpecialRequest,
+		RepresentativeGuest: req.RepresentativeGuest,
+		RoomGuests:          req.RoomGuests,
+	})
+	if err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	status := http.StatusCreated
+	if replayed {
+		status = http.StatusOK
+	}
+	platformhttp.WriteJSON(c, status, gin.H{"data": grp})
+}
+
+func (h *Handler) handleGetBookingGroup(c *gin.Context) {
+	principal, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		platformhttp.WriteError(c, apperror.Unauthenticated("authentication required"))
+		return
+	}
+	groupID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		platformhttp.WriteError(c, apperror.Validation("invalid booking group id", apperror.FieldError{
+			Field:   "id",
+			Message: "must be a valid UUID",
+		}))
+		return
+	}
+	grp, err := h.svc.GetBookingGroup(c.Request.Context(), principal, groupID)
+	if err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	platformhttp.WriteJSON(c, http.StatusOK, gin.H{"data": grp})
+}
+
+func (h *Handler) handleListMyBookingGroups(c *gin.Context) {
+	principal, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		platformhttp.WriteError(c, apperror.Unauthenticated("authentication required"))
+		return
+	}
+	limit, cursor, err := platformhttp.ParseCursorParams(c, 20, 100)
+	if err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	res, err := h.svc.ListMyBookingGroups(c.Request.Context(), principal, cursor, limit)
+	if err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	platformhttp.WriteJSON(c, http.StatusOK, res)
 }

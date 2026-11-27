@@ -35,6 +35,7 @@ type (
 	HoldResult            = domain.HoldResult
 	GuestSnapshot         = domain.GuestSnapshot
 	Booking               = domain.Booking
+	BookingGroup          = domain.BookingGroup
 )
 
 const (
@@ -103,6 +104,10 @@ type Repository interface {
 	UpdateBookingStatusCheckedOut(ctx context.Context, bookingID uuid.UUID, now time.Time) (domain.Booking, error)
 	ListBookings(ctx context.Context, customerID, groupID *uuid.UUID, status, cursor string, limit int) ([]domain.Booking, *string, error)
 	ListBookingsByGroupID(ctx context.Context, groupID uuid.UUID) ([]domain.Booking, error)
+	InsertBookingGroup(ctx context.Context, g domain.BookingGroup) (domain.BookingGroup, error)
+	GetBookingGroupByID(ctx context.Context, id uuid.UUID) (domain.BookingGroup, error)
+	FindBookingGroupByCustomerIdempotencyKey(ctx context.Context, customerID uuid.UUID, key string) (*domain.BookingGroup, error)
+	ListBookingGroupsByCustomer(ctx context.Context, customerID uuid.UUID, cursor string, limit int) ([]domain.BookingGroup, *string, error)
 }
 
 // QuoteAvailabilityParams defines inputs for POST /api/v1/availability/quote.

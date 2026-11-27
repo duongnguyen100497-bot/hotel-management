@@ -404,3 +404,41 @@ func GenerateReferenceCode(prefix string, now time.Time) string {
 	_, _ = rand.Read(buf)
 	return fmt.Sprintf("%s-%s-%s", prefix, now.UTC().Format("20060102"), strings.ToUpper(hex.EncodeToString(buf)))
 }
+
+// BookingGroup represents a multi-room booking aggregate with derived status and child bookings.
+type BookingGroup struct {
+	ID             uuid.UUID       `json:"id"`
+	ReferenceCode  string          `json:"referenceCode"`
+	CustomerID     uuid.UUID       `json:"customerId"`
+	Status         GroupStatus     `json:"status"`
+	ExpiresAt      *time.Time      `json:"expiresAt,omitempty"`
+	IdempotencyKey string          `json:"-"`
+	SubtotalAmount decimal.Decimal `json:"subtotalAmount"`
+	VatAmount      decimal.Decimal `json:"vatAmount"`
+	TotalAmount    decimal.Decimal `json:"totalAmount"`
+	Currency       string          `json:"currency"`
+	Bookings       []Booking       `json:"bookings"`
+	CreatedAt      time.Time       `json:"createdAt"`
+	UpdatedAt      time.Time       `json:"updatedAt"`
+	Version        int             `json:"version"`
+}
+
+// PopulateTotals computes aggregate money totals from child bookings.
+func (g *BookingGroup) PopulateTotals() {
+	sub := decimal.Zero
+	vat := decimal.Zero
+	tot := decimal.Zero
+	curr := "VND"
+	for i, b := range g.Bookings {
+		if i == 0 && b.Currency != "" {
+			curr = b.Currency
+		}
+		sub = sub.Add(b.SubtotalAmount)
+		vat = vat.Add(b.VatAmount)
+		tot = tot.Add(b.TotalAmount)
+	}
+	g.SubtotalAmount = sub
+	g.VatAmount = vat
+	g.TotalAmount = tot
+	g.Currency = curr
+}
