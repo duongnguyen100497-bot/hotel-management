@@ -39,6 +39,13 @@ func (h *Handler) RegisterRoutes(api *gin.RouterGroup, authMiddleware gin.Handle
 	}
 	secured.POST("/holds", h.handleCreateHold)
 	secured.DELETE("/holds/:id", h.handleReleaseHold)
+
+	// Individual bookings
+	secured.POST("/bookings", h.handleCreateBooking)
+	secured.GET("/bookings", rbacapp.RequirePermission(h.authorizer, "booking.read"), h.handleListBookings)
+	secured.GET("/me/bookings", h.handleListMyBookings)
+	secured.GET("/bookings/:id", h.handleGetBooking)
+	secured.POST("/bookings/:id/confirm", rbacapp.RequirePermission(h.authorizer, "booking.confirm"), h.handleConfirmBooking)
 }
 
 type availabilityQuoteRequest struct {
@@ -144,4 +151,174 @@ func (h *Handler) handleReleaseHold(c *gin.Context) {
 		return
 	}
 	platformhttp.WriteJSON(c, http.StatusOK, gin.H{"data": gin.H{"released": true}})
+}
+
+type createBookingRequest struct {
+	CustomerID          *uuid.UUID               `json:"customerId,omitempty"`
+	HoldID              *uuid.UUID               `json:"holdId,omitempty"`
+	HoldToken           string                   `json:"holdToken,omitempty"`
+	RoomTypeID          *uuid.UUID               `json:"roomTypeId,omitempty"`
+	RoomID              *uuid.UUID               `json:"roomId,omitempty"`
+	CheckIn             string                   `json:"checkIn,omitempty"`
+	CheckOut            string                   `json:"checkOut,omitempty"`
+	Adults              int                      `json:"adults"`
+	Children            int                      `json:"children"`
+	SpecialRequest      string                   `json:"specialRequest,omitempty"`
+	RepresentativeGuest bookingapp.GuestSnapshot `json:"representativeGuest"`
+}
+
+func (h *Handler) handleCreateBooking(c *gin.Context) {
+	principal, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		platformhttp.WriteError(c, apperror.Unauthenticated("authentication required"))
+		return
+	}
+	var req createBookingRequest
+	if err := platformhttp.DecodeJSON(c, &req); err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	b, replayed, err := h.svc.CreateBooking(c.Request.Context(), principal, bookingapp.CreateBookingParams{
+		IdempotencyKey:      platformhttp.IdempotencyKey(c),
+		CustomerID:          req.CustomerID,
+		HoldID:              req.HoldID,
+		HoldToken:           req.HoldToken,
+		RoomTypeID:          req.RoomTypeID,
+		RoomID:              req.RoomID,
+		CheckIn:             req.CheckIn,
+		CheckOut:            req.CheckOut,
+		Adults:              req.Adults,
+		Children:            req.Children,
+		SpecialRequest:      req.SpecialRequest,
+		RepresentativeGuest: req.RepresentativeGuest,
+	})
+	if err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	status := http.StatusCreated
+	if replayed {
+		status = http.StatusOK
+	}
+	platformhttp.WriteJSON(c, status, gin.H{"data": b})
+}
+
+func (h *Handler) handleGetBooking(c *gin.Context) {
+	principal, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		platformhttp.WriteError(c, apperror.Unauthenticated("authentication required"))
+		return
+	}
+	bookingID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		platformhttp.WriteError(c, apperror.Validation("invalid booking id", apperror.FieldError{
+			Field:   "id",
+			Message: "must be a valid UUID",
+		}))
+		return
+	}
+	b, err := h.svc.GetBooking(c.Request.Context(), principal, bookingID)
+	if err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	platformhttp.WriteJSON(c, http.StatusOK, gin.H{"data": b})
+}
+
+func (h *Handler) handleListBookings(c *gin.Context) {
+	principal, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		platformhttp.WriteError(c, apperror.Unauthenticated("authentication required"))
+		return
+	}
+	limit, cursor, err := platformhttp.ParseCursorParams(c, 20, 100)
+	if err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	var custID, groupID *uuid.UUID
+	if raw := strings.TrimSpace(c.Query("customerId")); raw != "" {
+		parsed, err := uuid.Parse(raw)
+		if err != nil {
+			platformhttp.WriteError(c, apperror.Validation("invalid customerId", apperror.FieldError{Field: "customerId", Message: "must be a valid UUID"}))
+			return
+		}
+		custID = &parsed
+	}
+	if raw := strings.TrimSpace(c.Query("bookingGroupId")); raw != "" {
+		parsed, err := uuid.Parse(raw)
+		if err != nil {
+			platformhttp.WriteError(c, apperror.Validation("invalid bookingGroupId", apperror.FieldError{Field: "bookingGroupId", Message: "must be a valid UUID"}))
+			return
+		}
+		groupID = &parsed
+	}
+	res, err := h.svc.ListBookings(c.Request.Context(), principal, bookingapp.ListBookingsFilter{
+		CustomerID:     custID,
+		BookingGroupID: groupID,
+		Status:         strings.TrimSpace(c.Query("status")),
+		Cursor:         cursor,
+		Limit:          limit,
+	})
+	if err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	platformhttp.WriteJSON(c, http.StatusOK, res)
+}
+
+func (h *Handler) handleListMyBookings(c *gin.Context) {
+	principal, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		platformhttp.WriteError(c, apperror.Unauthenticated("authentication required"))
+		return
+	}
+	limit, cursor, err := platformhttp.ParseCursorParams(c, 20, 100)
+	if err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	res, err := h.svc.ListMyBookings(c.Request.Context(), principal, bookingapp.ListBookingsFilter{
+		Status: strings.TrimSpace(c.Query("status")),
+		Cursor: cursor,
+		Limit:  limit,
+	})
+	if err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	platformhttp.WriteJSON(c, http.StatusOK, res)
+}
+
+type confirmBookingRequest struct {
+	Reason string `json:"reason,omitempty"`
+}
+
+func (h *Handler) handleConfirmBooking(c *gin.Context) {
+	principal, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		platformhttp.WriteError(c, apperror.Unauthenticated("authentication required"))
+		return
+	}
+	bookingID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		platformhttp.WriteError(c, apperror.Validation("invalid booking id", apperror.FieldError{
+			Field:   "id",
+			Message: "must be a valid UUID",
+		}))
+		return
+	}
+	var req confirmBookingRequest
+	if c.Request.Body != nil && c.Request.ContentLength != 0 {
+		if err := platformhttp.DecodeJSON(c, &req); err != nil && err != io.EOF {
+			platformhttp.WriteError(c, err)
+			return
+		}
+	}
+	b, err := h.svc.ConfirmBooking(c.Request.Context(), principal, bookingID, req.Reason)
+	if err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	platformhttp.WriteJSON(c, http.StatusOK, gin.H{"data": b})
 }

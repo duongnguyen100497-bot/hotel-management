@@ -324,3 +324,83 @@ type BookingStatusHistoryEntry struct {
 	CorrelationID *uuid.UUID
 	OccurredAt    time.Time
 }
+
+// GuestSnapshot captures immutable representative guest information at booking time.
+// Updating customers afterwards MUST NEVER mutate this snapshot.
+type GuestSnapshot struct {
+	FullName        string    `json:"fullName"`
+	Phone           string    `json:"phone"`
+	Email           string    `json:"email,omitempty"`
+	NationalityCode string    `json:"nationalityCode,omitempty"`
+	SpecialRequest  string    `json:"specialRequest,omitempty"`
+	CreatedAt       time.Time `json:"createdAt,omitempty"`
+}
+
+// NormalizeAndValidate validates required guest snapshot fields.
+func (g *GuestSnapshot) NormalizeAndValidate(prefix string) error {
+	g.FullName = strings.TrimSpace(g.FullName)
+	g.Phone = strings.TrimSpace(g.Phone)
+	g.Email = strings.TrimSpace(g.Email)
+	g.NationalityCode = strings.ToUpper(strings.TrimSpace(g.NationalityCode))
+	g.SpecialRequest = strings.TrimSpace(g.SpecialRequest)
+
+	p := ""
+	if prefix != "" {
+		p = prefix + "."
+	}
+	var fields []apperror.FieldError
+	if g.FullName == "" {
+		fields = append(fields, apperror.FieldError{Field: p + "fullName", Message: "fullName is required"})
+	}
+	if g.Phone == "" {
+		fields = append(fields, apperror.FieldError{Field: p + "phone", Message: "phone is required"})
+	}
+	if len(g.NationalityCode) > 8 {
+		fields = append(fields, apperror.FieldError{Field: p + "nationalityCode", Message: "must be at most 8 characters"})
+	}
+	if len(fields) > 0 {
+		return apperror.Validation("invalid representative guest", fields...)
+	}
+	return nil
+}
+
+// Booking represents a persisted room reservation with immutable pricing and guest snapshots.
+type Booking struct {
+	ID                  uuid.UUID       `json:"id"`
+	ReferenceCode       string          `json:"referenceCode"`
+	BookingGroupID      *uuid.UUID      `json:"bookingGroupId,omitempty"`
+	CustomerID          uuid.UUID       `json:"customerId"`
+	RoomID              uuid.UUID       `json:"roomId"`
+	RoomTypeID          uuid.UUID       `json:"roomTypeId"`
+	CheckIn             string          `json:"checkIn"`
+	CheckOut            string          `json:"checkOut"`
+	CheckInTime         time.Time       `json:"-"`
+	CheckOutTime        time.Time       `json:"-"`
+	Nights              int             `json:"nights"`
+	Adults              int             `json:"adults"`
+	Children            int             `json:"children"`
+	Status              BookingStatus   `json:"status"`
+	NightlyRateSnapshot decimal.Decimal `json:"nightlyRateSnapshot"`
+	VatRateID           uuid.UUID       `json:"vatRateId"`
+	VatRateSnapshot     decimal.Decimal `json:"vatRateSnapshot"`
+	SubtotalAmount      decimal.Decimal `json:"subtotalAmount"`
+	VatAmount           decimal.Decimal `json:"vatAmount"`
+	TotalAmount         decimal.Decimal `json:"totalAmount"`
+	Currency            string          `json:"currency"`
+	SpecialRequest      string          `json:"specialRequest,omitempty"`
+	ExpiresAt           *time.Time      `json:"expiresAt,omitempty"`
+	CancelledAt         *time.Time      `json:"cancelledAt,omitempty"`
+	CancelReason        string          `json:"cancelReason,omitempty"`
+	IdempotencyKey      string          `json:"-"`
+	RepresentativeGuest *GuestSnapshot  `json:"representativeGuest,omitempty"`
+	CreatedAt           time.Time       `json:"createdAt"`
+	UpdatedAt           time.Time       `json:"updatedAt"`
+	Version             int             `json:"version"`
+}
+
+// GenerateReferenceCode builds a human-readable booking/group reference code (e.g. BK-20261201-A1B2C3).
+func GenerateReferenceCode(prefix string, now time.Time) string {
+	buf := make([]byte, 4)
+	_, _ = rand.Read(buf)
+	return fmt.Sprintf("%s-%s-%s", prefix, now.UTC().Format("20060102"), strings.ToUpper(hex.EncodeToString(buf)))
+}

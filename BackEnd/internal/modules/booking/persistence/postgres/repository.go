@@ -2,13 +2,19 @@ package postgres
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/shopspring/decimal"
 	"github.com/trandinh0506/hotel-management/backend/internal/modules/booking/domain"
 	"github.com/trandinh0506/hotel-management/backend/internal/modules/booking/persistence/postgres/sqlcgen"
+	"github.com/trandinh0506/hotel-management/backend/internal/platform/apperror"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/db"
 )
 
@@ -52,6 +58,31 @@ func fromPgText(t pgtype.Text) string {
 		return ""
 	}
 	return t.String
+}
+
+type timeIDCursor struct {
+	CreatedAt time.Time `json:"t"`
+	ID        uuid.UUID `json:"id"`
+}
+
+func encodeTimeIDCursor(t time.Time, id uuid.UUID) string {
+	raw, _ := json.Marshal(timeIDCursor{CreatedAt: t.UTC(), ID: id})
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+func decodeTimeIDCursor(cursor string) (*time.Time, uuid.UUID, error) {
+	if cursor == "" {
+		return nil, uuid.Nil, nil
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return nil, uuid.Nil, apperror.Validation("invalid cursor", apperror.FieldError{Field: "cursor", Message: "malformed cursor"})
+	}
+	var c timeIDCursor
+	if err := json.Unmarshal(raw, &c); err != nil || c.CreatedAt.IsZero() || c.ID == uuid.Nil {
+		return nil, uuid.Nil, apperror.Validation("invalid cursor", apperror.FieldError{Field: "cursor", Message: "malformed cursor"})
+	}
+	return &c.CreatedAt, c.ID, nil
 }
 
 // ListUnavailableRoomIDs returns room IDs among roomIDs that have an overlapping active booking
@@ -186,6 +217,23 @@ func (r *Repository) ListActiveNonExpiredHolds(ctx context.Context, now time.Tim
 	return out, nil
 }
 
+// FindConvertedHoldsForRoomStay returns converted holds matching room_id and stay so post-commit Redis cleanup can release keys.
+func (r *Repository) FindConvertedHoldsForRoomStay(ctx context.Context, roomID uuid.UUID, checkIn, checkOut time.Time) ([]domain.ReservationHold, error) {
+	rows, err := r.queries(ctx).FindConvertedHoldForRoomStay(ctx, sqlcgen.FindConvertedHoldForRoomStayParams{
+		RoomID:  roomID,
+		Column2: toPgDate(checkIn),
+		Column3: toPgDate(checkOut),
+	})
+	if err != nil {
+		return nil, db.MapPgError(err)
+	}
+	out := make([]domain.ReservationHold, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, mapHoldRow(row.ID, row.CustomerID, row.BookingGroupID, row.RoomID, row.RoomTypeID, row.CheckIn, row.CheckOut, row.HoldMode, row.HoldToken, row.RedisKey, row.TtlSeconds, row.Status, row.ExpiresAt, row.ReleasedReason, row.CreatedAt, row.UpdatedAt))
+	}
+	return out, nil
+}
+
 // ClaimExpiredPendingBookings locks up to limit pending bookings whose expires_at <= now using SKIP LOCKED.
 func (r *Repository) ClaimExpiredPendingBookings(ctx context.Context, now time.Time, limit int) ([]domain.ExpiredBookingSummary, error) {
 	if limit <= 0 {
@@ -264,6 +312,188 @@ func (r *Repository) RecomputeBookingGroupStatus(ctx context.Context, groupID uu
 	return derived, nil
 }
 
+// InsertBooking persists a new booking row. Returns raw pgx/mapped error (preserving 23P01 detection via db.IsExclusionViolation).
+func (r *Repository) InsertBooking(ctx context.Context, b domain.Booking) (domain.Booking, error) {
+	row, err := r.queries(ctx).InsertBooking(ctx, sqlcgen.InsertBookingParams{
+		ID:                  b.ID,
+		ReferenceCode:       b.ReferenceCode,
+		BookingGroupID:      b.BookingGroupID,
+		CustomerID:          b.CustomerID,
+		RoomID:              b.RoomID,
+		RoomTypeID:          b.RoomTypeID,
+		Column7:             toPgDate(b.CheckInTime),
+		Column8:             toPgDate(b.CheckOutTime),
+		Adults:              int16(b.Adults),
+		Children:            int16(b.Children),
+		Status:              string(b.Status),
+		NightlyRateSnapshot: b.NightlyRateSnapshot,
+		VatRateID:           b.VatRateID,
+		VatRateSnapshot:     b.VatRateSnapshot,
+		SubtotalAmount:      b.SubtotalAmount,
+		VatAmount:           b.VatAmount,
+		TotalAmount:         b.TotalAmount,
+		Currency:            b.Currency,
+		SpecialRequest:      toPgText(b.SpecialRequest),
+		ExpiresAt:           b.ExpiresAt,
+		IdempotencyKey:      toPgText(b.IdempotencyKey),
+		CreatedAt:           b.CreatedAt,
+	})
+	if err != nil {
+		return domain.Booking{}, db.MapPgError(err)
+	}
+	return mapBookingCore(row.ID, row.ReferenceCode, row.BookingGroupID, row.CustomerID, row.RoomID, row.RoomTypeID, row.CheckIn, row.CheckOut, row.Adults, row.Children, row.Status, row.NightlyRateSnapshot, row.VatRateID, row.VatRateSnapshot, row.SubtotalAmount, row.VatAmount, row.TotalAmount, row.Currency, row.SpecialRequest, row.ExpiresAt, row.CancelledAt, row.CancelReason, row.IdempotencyKey, row.CreatedAt, row.UpdatedAt, row.Version, nil), nil
+}
+
+// InsertBookingGuestSnapshot inserts the immutable representative guest snapshot for a booking.
+func (r *Repository) InsertBookingGuestSnapshot(ctx context.Context, bookingID uuid.UUID, g domain.GuestSnapshot) (domain.GuestSnapshot, error) {
+	row, err := r.queries(ctx).InsertBookingGuestSnapshot(ctx, sqlcgen.InsertBookingGuestSnapshotParams{
+		BookingID:       bookingID,
+		FullName:        g.FullName,
+		Phone:           g.Phone,
+		Email:           toPgText(g.Email),
+		NationalityCode: toPgText(g.NationalityCode),
+		SpecialRequest:  toPgText(g.SpecialRequest),
+		CreatedAt:       g.CreatedAt,
+	})
+	if err != nil {
+		return domain.GuestSnapshot{}, db.MapPgError(err)
+	}
+	return domain.GuestSnapshot{
+		FullName:        row.FullName,
+		Phone:           row.Phone,
+		Email:           fromPgText(row.Email),
+		NationalityCode: fromPgText(row.NationalityCode),
+		SpecialRequest:  fromPgText(row.SpecialRequest),
+		CreatedAt:       row.CreatedAt,
+	}, nil
+}
+
+// GetBookingByID fetches a booking with its immutable guest snapshot.
+func (r *Repository) GetBookingByID(ctx context.Context, id uuid.UUID) (domain.Booking, error) {
+	row, err := r.queries(ctx).GetBookingByID(ctx, id)
+	if err != nil {
+		return domain.Booking{}, db.MapPgError(err)
+	}
+	return mapBookingWithGuest(row.ID, row.ReferenceCode, row.BookingGroupID, row.CustomerID, row.RoomID, row.RoomTypeID, row.CheckIn, row.CheckOut, row.Adults, row.Children, row.Status, row.NightlyRateSnapshot, row.VatRateID, row.VatRateSnapshot, row.SubtotalAmount, row.VatAmount, row.TotalAmount, row.Currency, row.SpecialRequest, row.ExpiresAt, row.CancelledAt, row.CancelReason, row.IdempotencyKey, row.CreatedAt, row.UpdatedAt, row.Version, row.GuestFullName, row.GuestPhone, row.GuestEmail, row.GuestNationalityCode, row.GuestSpecialRequest, row.GuestCreatedAt), nil
+}
+
+// GetBookingByIDForUpdate locks and returns a booking row.
+func (r *Repository) GetBookingByIDForUpdate(ctx context.Context, id uuid.UUID) (domain.Booking, error) {
+	row, err := r.queries(ctx).GetBookingByIDForUpdate(ctx, id)
+	if err != nil {
+		return domain.Booking{}, db.MapPgError(err)
+	}
+	return mapBookingCore(row.ID, row.ReferenceCode, row.BookingGroupID, row.CustomerID, row.RoomID, row.RoomTypeID, row.CheckIn, row.CheckOut, row.Adults, row.Children, row.Status, row.NightlyRateSnapshot, row.VatRateID, row.VatRateSnapshot, row.SubtotalAmount, row.VatAmount, row.TotalAmount, row.Currency, row.SpecialRequest, row.ExpiresAt, row.CancelledAt, row.CancelReason, row.IdempotencyKey, row.CreatedAt, row.UpdatedAt, row.Version, nil), nil
+}
+
+// FindBookingByCustomerIdempotencyKey looks up an existing booking for (customerID, key). Returns (nil, nil) if not found.
+func (r *Repository) FindBookingByCustomerIdempotencyKey(ctx context.Context, customerID uuid.UUID, key string) (*domain.Booking, error) {
+	if key == "" {
+		return nil, nil
+	}
+	row, err := r.queries(ctx).GetBookingByCustomerIdempotencyKey(ctx, sqlcgen.GetBookingByCustomerIdempotencyKeyParams{
+		CustomerID:     customerID,
+		IdempotencyKey: toPgText(key),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, db.MapPgError(err)
+	}
+	b := mapBookingWithGuest(row.ID, row.ReferenceCode, row.BookingGroupID, row.CustomerID, row.RoomID, row.RoomTypeID, row.CheckIn, row.CheckOut, row.Adults, row.Children, row.Status, row.NightlyRateSnapshot, row.VatRateID, row.VatRateSnapshot, row.SubtotalAmount, row.VatAmount, row.TotalAmount, row.Currency, row.SpecialRequest, row.ExpiresAt, row.CancelledAt, row.CancelReason, row.IdempotencyKey, row.CreatedAt, row.UpdatedAt, row.Version, row.GuestFullName, row.GuestPhone, row.GuestEmail, row.GuestNationalityCode, row.GuestSpecialRequest, row.GuestCreatedAt)
+	return &b, nil
+}
+
+// UpdateBookingStatusConfirmed transitions a pending booking to confirmed and clears expires_at.
+func (r *Repository) UpdateBookingStatusConfirmed(ctx context.Context, bookingID uuid.UUID, now time.Time) (domain.Booking, error) {
+	row, err := r.queries(ctx).UpdateBookingStatusConfirmed(ctx, sqlcgen.UpdateBookingStatusConfirmedParams{
+		ID:        bookingID,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		return domain.Booking{}, db.MapPgError(err)
+	}
+	return mapBookingCore(row.ID, row.ReferenceCode, row.BookingGroupID, row.CustomerID, row.RoomID, row.RoomTypeID, row.CheckIn, row.CheckOut, row.Adults, row.Children, row.Status, row.NightlyRateSnapshot, row.VatRateID, row.VatRateSnapshot, row.SubtotalAmount, row.VatAmount, row.TotalAmount, row.Currency, row.SpecialRequest, row.ExpiresAt, row.CancelledAt, row.CancelReason, row.IdempotencyKey, row.CreatedAt, row.UpdatedAt, row.Version, nil), nil
+}
+
+// UpdateBookingStatusCheckedIn transitions a confirmed booking to checked_in.
+func (r *Repository) UpdateBookingStatusCheckedIn(ctx context.Context, bookingID uuid.UUID, now time.Time) (domain.Booking, error) {
+	row, err := r.queries(ctx).UpdateBookingStatusCheckedIn(ctx, sqlcgen.UpdateBookingStatusCheckedInParams{
+		ID:        bookingID,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		return domain.Booking{}, db.MapPgError(err)
+	}
+	return mapBookingCore(row.ID, row.ReferenceCode, row.BookingGroupID, row.CustomerID, row.RoomID, row.RoomTypeID, row.CheckIn, row.CheckOut, row.Adults, row.Children, row.Status, row.NightlyRateSnapshot, row.VatRateID, row.VatRateSnapshot, row.SubtotalAmount, row.VatAmount, row.TotalAmount, row.Currency, row.SpecialRequest, row.ExpiresAt, row.CancelledAt, row.CancelReason, row.IdempotencyKey, row.CreatedAt, row.UpdatedAt, row.Version, nil), nil
+}
+
+// UpdateBookingStatusCheckedOut transitions a checked_in booking to checked_out.
+func (r *Repository) UpdateBookingStatusCheckedOut(ctx context.Context, bookingID uuid.UUID, now time.Time) (domain.Booking, error) {
+	row, err := r.queries(ctx).UpdateBookingStatusCheckedOut(ctx, sqlcgen.UpdateBookingStatusCheckedOutParams{
+		ID:        bookingID,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		return domain.Booking{}, db.MapPgError(err)
+	}
+	return mapBookingCore(row.ID, row.ReferenceCode, row.BookingGroupID, row.CustomerID, row.RoomID, row.RoomTypeID, row.CheckIn, row.CheckOut, row.Adults, row.Children, row.Status, row.NightlyRateSnapshot, row.VatRateID, row.VatRateSnapshot, row.SubtotalAmount, row.VatAmount, row.TotalAmount, row.Currency, row.SpecialRequest, row.ExpiresAt, row.CancelledAt, row.CancelReason, row.IdempotencyKey, row.CreatedAt, row.UpdatedAt, row.Version, nil), nil
+}
+
+// ListBookings lists bookings with optional filters and cursor pagination.
+func (r *Repository) ListBookings(ctx context.Context, customerID, groupID *uuid.UUID, status, cursor string, limit int) ([]domain.Booking, *string, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	cursorTime, cursorID, err := decodeTimeIDCursor(cursor)
+	if err != nil {
+		return nil, nil, err
+	}
+	var cursorIDPtr *uuid.UUID
+	if cursorID != uuid.Nil {
+		idCopy := cursorID
+		cursorIDPtr = &idCopy
+	}
+	rows, err := r.queries(ctx).ListBookingsFiltered(ctx, sqlcgen.ListBookingsFilteredParams{
+		CustomerID:      customerID,
+		BookingGroupID:  groupID,
+		Status:          status,
+		CursorCreatedAt: cursorTime,
+		CursorID:        cursorIDPtr,
+		LimitRows:       int32(limit + 1),
+	})
+	if err != nil {
+		return nil, nil, db.MapPgError(err)
+	}
+
+	var nextCursor *string
+	if len(rows) > limit {
+		rows = rows[:limit]
+		last := rows[len(rows)-1]
+		nc := encodeTimeIDCursor(last.CreatedAt, last.ID)
+		nextCursor = &nc
+	}
+	out := make([]domain.Booking, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, mapBookingWithGuest(row.ID, row.ReferenceCode, row.BookingGroupID, row.CustomerID, row.RoomID, row.RoomTypeID, row.CheckIn, row.CheckOut, row.Adults, row.Children, row.Status, row.NightlyRateSnapshot, row.VatRateID, row.VatRateSnapshot, row.SubtotalAmount, row.VatAmount, row.TotalAmount, row.Currency, row.SpecialRequest, row.ExpiresAt, row.CancelledAt, row.CancelReason, row.IdempotencyKey, row.CreatedAt, row.UpdatedAt, row.Version, row.GuestFullName, row.GuestPhone, row.GuestEmail, row.GuestNationalityCode, row.GuestSpecialRequest, row.GuestCreatedAt))
+	}
+	return out, nextCursor, nil
+}
+
+// ListBookingsByGroupID returns all child bookings belonging to a booking group ordered by ID.
+func (r *Repository) ListBookingsByGroupID(ctx context.Context, groupID uuid.UUID) ([]domain.Booking, error) {
+	rows, err := r.queries(ctx).ListBookingsByGroupID(ctx, &groupID)
+	if err != nil {
+		return nil, db.MapPgError(err)
+	}
+	out := make([]domain.Booking, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, mapBookingWithGuest(row.ID, row.ReferenceCode, row.BookingGroupID, row.CustomerID, row.RoomID, row.RoomTypeID, row.CheckIn, row.CheckOut, row.Adults, row.Children, row.Status, row.NightlyRateSnapshot, row.VatRateID, row.VatRateSnapshot, row.SubtotalAmount, row.VatAmount, row.TotalAmount, row.Currency, row.SpecialRequest, row.ExpiresAt, row.CancelledAt, row.CancelReason, row.IdempotencyKey, row.CreatedAt, row.UpdatedAt, row.Version, row.GuestFullName, row.GuestPhone, row.GuestEmail, row.GuestNationalityCode, row.GuestSpecialRequest, row.GuestCreatedAt))
+	}
+	return out, nil
+}
+
 func mapHoldRow(
 	id, customerID uuid.UUID,
 	groupID *uuid.UUID,
@@ -294,4 +524,97 @@ func mapHoldRow(
 		CreatedAt:      createdAt,
 		UpdatedAt:      updatedAt,
 	}
+}
+
+func mapBookingCore(
+	id uuid.UUID,
+	refCode string,
+	groupID *uuid.UUID,
+	customerID, roomID, roomTypeID uuid.UUID,
+	checkIn, checkOut pgtype.Date,
+	adults, children int16,
+	status string,
+	nightlyRate decimal.Decimal,
+	vatRateID uuid.UUID,
+	vatRate, subtotal, vatAmt, totalAmt decimal.Decimal,
+	currency string,
+	specialReq pgtype.Text,
+	expiresAt, cancelledAt *time.Time,
+	cancelReason, idempKey pgtype.Text,
+	createdAt, updatedAt time.Time,
+	version int32,
+	guest *domain.GuestSnapshot,
+) domain.Booking {
+	inTime := fromPgDate(checkIn)
+	outTime := fromPgDate(checkOut)
+	nights := int(outTime.Sub(inTime).Hours() / 24)
+	return domain.Booking{
+		ID:                  id,
+		ReferenceCode:       refCode,
+		BookingGroupID:      groupID,
+		CustomerID:          customerID,
+		RoomID:              roomID,
+		RoomTypeID:          roomTypeID,
+		CheckIn:             inTime.Format(domain.DateLayout),
+		CheckOut:            outTime.Format(domain.DateLayout),
+		CheckInTime:         inTime,
+		CheckOutTime:        outTime,
+		Nights:              nights,
+		Adults:              int(adults),
+		Children:            int(children),
+		Status:              domain.BookingStatus(status),
+		NightlyRateSnapshot: nightlyRate,
+		VatRateID:           vatRateID,
+		VatRateSnapshot:     vatRate,
+		SubtotalAmount:      subtotal,
+		VatAmount:           vatAmt,
+		TotalAmount:         totalAmt,
+		Currency:            currency,
+		SpecialRequest:      fromPgText(specialReq),
+		ExpiresAt:           expiresAt,
+		CancelledAt:         cancelledAt,
+		CancelReason:        fromPgText(cancelReason),
+		IdempotencyKey:      fromPgText(idempKey),
+		RepresentativeGuest: guest,
+		CreatedAt:           createdAt,
+		UpdatedAt:           updatedAt,
+		Version:             int(version),
+	}
+}
+
+func mapBookingWithGuest(
+	id uuid.UUID,
+	refCode string,
+	groupID *uuid.UUID,
+	customerID, roomID, roomTypeID uuid.UUID,
+	checkIn, checkOut pgtype.Date,
+	adults, children int16,
+	status string,
+	nightlyRate decimal.Decimal,
+	vatRateID uuid.UUID,
+	vatRate, subtotal, vatAmt, totalAmt decimal.Decimal,
+	currency string,
+	specialReq pgtype.Text,
+	expiresAt, cancelledAt *time.Time,
+	cancelReason, idempKey pgtype.Text,
+	createdAt, updatedAt time.Time,
+	version int32,
+	guestFullName, guestPhone, guestEmail, guestNationality, guestSpecialReq pgtype.Text,
+	guestCreatedAt *time.Time,
+) domain.Booking {
+	var guest *domain.GuestSnapshot
+	if guestFullName.Valid {
+		g := domain.GuestSnapshot{
+			FullName:        guestFullName.String,
+			Phone:           fromPgText(guestPhone),
+			Email:           fromPgText(guestEmail),
+			NationalityCode: fromPgText(guestNationality),
+			SpecialRequest:  fromPgText(guestSpecialReq),
+		}
+		if guestCreatedAt != nil {
+			g.CreatedAt = *guestCreatedAt
+		}
+		guest = &g
+	}
+	return mapBookingCore(id, refCode, groupID, customerID, roomID, roomTypeID, checkIn, checkOut, adults, children, status, nightlyRate, vatRateID, vatRate, subtotal, vatAmt, totalAmt, currency, specialReq, expiresAt, cancelledAt, cancelReason, idempKey, createdAt, updatedAt, version, guest)
 }

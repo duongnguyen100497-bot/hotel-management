@@ -33,7 +33,35 @@ type (
 	ReservationHold       = domain.ReservationHold
 	HoldRoomSummary       = domain.HoldRoomSummary
 	HoldResult            = domain.HoldResult
+	GuestSnapshot         = domain.GuestSnapshot
+	Booking               = domain.Booking
 )
+
+const (
+	EventBookingConfirmed = "booking.confirmed"
+	EventBookingCancelled = "booking.cancelled"
+)
+
+// PayableTarget summarizes a single booking or booking group targeted by a Phase 4 payment intent.
+type PayableTarget struct {
+	TargetType     string
+	BookingID      *uuid.UUID
+	BookingGroupID *uuid.UUID
+	CustomerID     uuid.UUID
+	TotalAmount    decimal.Decimal
+	Currency       string
+	ExpiresAt      *time.Time
+	ChildBookings  []Booking
+}
+
+// BookingStatusService is the cross-module application port consumed by Phase 4 (wallet) and Phase 5 (stayops).
+type BookingStatusService interface {
+	GetBookingByID(ctx context.Context, bookingID uuid.UUID) (Booking, error)
+	GetPayableTarget(ctx context.Context, bookingID *uuid.UUID, bookingGroupID *uuid.UUID) (PayableTarget, error)
+	ConfirmPaidBookings(ctx context.Context, bookingIDs []uuid.UUID, actorUserID *uuid.UUID, reason string) ([]Booking, error)
+	MarkCheckedIn(ctx context.Context, bookingID uuid.UUID, actorUserID *uuid.UUID, reason string) (Booking, error)
+	MarkCheckedOut(ctx context.Context, bookingID uuid.UUID, actorUserID *uuid.UUID, reason string) (Booking, error)
+}
 
 // HoldStore defines the Redis Lua persistence contract for atomic room/group holds.
 type HoldStore interface {
@@ -64,6 +92,17 @@ type Repository interface {
 	MarkBookingExpired(ctx context.Context, bookingID uuid.UUID, now time.Time) error
 	InsertBookingStatusHistory(ctx context.Context, entry domain.BookingStatusHistoryEntry) error
 	RecomputeBookingGroupStatus(ctx context.Context, groupID uuid.UUID, now time.Time) (domain.GroupStatus, error)
+	FindConvertedHoldsForRoomStay(ctx context.Context, roomID uuid.UUID, checkIn, checkOut time.Time) ([]domain.ReservationHold, error)
+	InsertBooking(ctx context.Context, b domain.Booking) (domain.Booking, error)
+	InsertBookingGuestSnapshot(ctx context.Context, bookingID uuid.UUID, g domain.GuestSnapshot) (domain.GuestSnapshot, error)
+	GetBookingByID(ctx context.Context, id uuid.UUID) (domain.Booking, error)
+	GetBookingByIDForUpdate(ctx context.Context, id uuid.UUID) (domain.Booking, error)
+	FindBookingByCustomerIdempotencyKey(ctx context.Context, customerID uuid.UUID, key string) (*domain.Booking, error)
+	UpdateBookingStatusConfirmed(ctx context.Context, bookingID uuid.UUID, now time.Time) (domain.Booking, error)
+	UpdateBookingStatusCheckedIn(ctx context.Context, bookingID uuid.UUID, now time.Time) (domain.Booking, error)
+	UpdateBookingStatusCheckedOut(ctx context.Context, bookingID uuid.UUID, now time.Time) (domain.Booking, error)
+	ListBookings(ctx context.Context, customerID, groupID *uuid.UUID, status, cursor string, limit int) ([]domain.Booking, *string, error)
+	ListBookingsByGroupID(ctx context.Context, groupID uuid.UUID) ([]domain.Booking, error)
 }
 
 // QuoteAvailabilityParams defines inputs for POST /api/v1/availability/quote.

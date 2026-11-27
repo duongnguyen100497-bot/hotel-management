@@ -1571,6 +1571,88 @@ paths:
         "409":
           description: Hold no longer active
 
+  /api/v1/bookings:
+    post:
+      summary: Create an individual booking from a hold (or staff walk-in) with idempotency
+      operationId: createBooking
+      tags:
+        - Booking
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        "201":
+          description: Booking created
+        "200":
+          description: Idempotent replay of existing booking
+        "409":
+          description: Hold expired or room overlap conflict
+    get:
+      summary: List bookings (staff booking.read)
+      operationId: listBookings
+      tags:
+        - Booking
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Paginated list of bookings
+
+  /api/v1/me/bookings:
+    get:
+      summary: List authenticated customer's own bookings
+      operationId: listMyBookings
+      tags:
+        - Booking
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Paginated list of customer's bookings
+
+  /api/v1/bookings/{id}:
+    get:
+      summary: Get booking detail by ID (staff booking.read or booking owner)
+      operationId: getBooking
+      tags:
+        - Booking
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Booking detail
+
+  /api/v1/bookings/{id}/confirm:
+    post:
+      summary: Manually confirm a pending booking (staff booking.confirm)
+      operationId: confirmBooking
+      tags:
+        - Booking
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Booking confirmed
+
 components:
   securitySchemes:
     BearerAuth:

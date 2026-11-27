@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/shopspring/decimal"
 )
 
 const claimExpiredPendingBookings = `-- name: ClaimExpiredPendingBookings :many
@@ -151,6 +152,349 @@ func (q *Queries) ClaimExpiredReservationHolds(ctx context.Context, arg ClaimExp
 	return items, nil
 }
 
+const findConvertedHoldForRoomStay = `-- name: FindConvertedHoldForRoomStay :many
+SELECT
+    id, customer_id, booking_group_id, room_id, room_type_id,
+    lower(stay)::date AS check_in, upper(stay)::date AS check_out,
+    hold_mode, hold_token, redis_key, ttl_seconds,
+    status, expires_at, released_reason, created_at, updated_at
+FROM reservation_holds
+WHERE room_id = $1
+  AND stay = daterange($2::date, $3::date, '[)')
+  AND status = 'converted'
+ORDER BY created_at DESC
+LIMIT 5
+`
+
+type FindConvertedHoldForRoomStayParams struct {
+	RoomID  uuid.UUID   `json:"room_id"`
+	Column2 pgtype.Date `json:"column_2"`
+	Column3 pgtype.Date `json:"column_3"`
+}
+
+type FindConvertedHoldForRoomStayRow struct {
+	ID             uuid.UUID   `json:"id"`
+	CustomerID     uuid.UUID   `json:"customer_id"`
+	BookingGroupID *uuid.UUID  `json:"booking_group_id"`
+	RoomID         uuid.UUID   `json:"room_id"`
+	RoomTypeID     uuid.UUID   `json:"room_type_id"`
+	CheckIn        pgtype.Date `json:"check_in"`
+	CheckOut       pgtype.Date `json:"check_out"`
+	HoldMode       string      `json:"hold_mode"`
+	HoldToken      string      `json:"hold_token"`
+	RedisKey       string      `json:"redis_key"`
+	TtlSeconds     int32       `json:"ttl_seconds"`
+	Status         string      `json:"status"`
+	ExpiresAt      time.Time   `json:"expires_at"`
+	ReleasedReason pgtype.Text `json:"released_reason"`
+	CreatedAt      time.Time   `json:"created_at"`
+	UpdatedAt      time.Time   `json:"updated_at"`
+}
+
+func (q *Queries) FindConvertedHoldForRoomStay(ctx context.Context, arg FindConvertedHoldForRoomStayParams) ([]FindConvertedHoldForRoomStayRow, error) {
+	rows, err := q.db.Query(ctx, findConvertedHoldForRoomStay, arg.RoomID, arg.Column2, arg.Column3)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []FindConvertedHoldForRoomStayRow{}
+	for rows.Next() {
+		var i FindConvertedHoldForRoomStayRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.CustomerID,
+			&i.BookingGroupID,
+			&i.RoomID,
+			&i.RoomTypeID,
+			&i.CheckIn,
+			&i.CheckOut,
+			&i.HoldMode,
+			&i.HoldToken,
+			&i.RedisKey,
+			&i.TtlSeconds,
+			&i.Status,
+			&i.ExpiresAt,
+			&i.ReleasedReason,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getBookingByCustomerIdempotencyKey = `-- name: GetBookingByCustomerIdempotencyKey :one
+SELECT
+    b.id, b.reference_code, b.booking_group_id, b.customer_id, b.room_id, b.room_type_id,
+    lower(b.stay)::date AS check_in, upper(b.stay)::date AS check_out,
+    b.adults, b.children, b.status,
+    b.nightly_rate_snapshot, b.vat_rate_id, b.vat_rate_snapshot,
+    b.subtotal_amount, b.vat_amount, b.total_amount, b.currency,
+    b.special_request, b.expires_at, b.cancelled_at, b.cancel_reason,
+    b.idempotency_key, b.created_at, b.updated_at, b.version,
+    g.full_name AS guest_full_name, g.phone AS guest_phone, g.email AS guest_email,
+    g.nationality_code AS guest_nationality_code, g.special_request AS guest_special_request,
+    g.created_at AS guest_created_at
+FROM bookings b
+LEFT JOIN booking_guest_snapshots g ON g.booking_id = b.id
+WHERE b.customer_id = $1
+  AND b.idempotency_key = $2
+`
+
+type GetBookingByCustomerIdempotencyKeyParams struct {
+	CustomerID     uuid.UUID   `json:"customer_id"`
+	IdempotencyKey pgtype.Text `json:"idempotency_key"`
+}
+
+type GetBookingByCustomerIdempotencyKeyRow struct {
+	ID                   uuid.UUID       `json:"id"`
+	ReferenceCode        string          `json:"reference_code"`
+	BookingGroupID       *uuid.UUID      `json:"booking_group_id"`
+	CustomerID           uuid.UUID       `json:"customer_id"`
+	RoomID               uuid.UUID       `json:"room_id"`
+	RoomTypeID           uuid.UUID       `json:"room_type_id"`
+	CheckIn              pgtype.Date     `json:"check_in"`
+	CheckOut             pgtype.Date     `json:"check_out"`
+	Adults               int16           `json:"adults"`
+	Children             int16           `json:"children"`
+	Status               string          `json:"status"`
+	NightlyRateSnapshot  decimal.Decimal `json:"nightly_rate_snapshot"`
+	VatRateID            uuid.UUID       `json:"vat_rate_id"`
+	VatRateSnapshot      decimal.Decimal `json:"vat_rate_snapshot"`
+	SubtotalAmount       decimal.Decimal `json:"subtotal_amount"`
+	VatAmount            decimal.Decimal `json:"vat_amount"`
+	TotalAmount          decimal.Decimal `json:"total_amount"`
+	Currency             string          `json:"currency"`
+	SpecialRequest       pgtype.Text     `json:"special_request"`
+	ExpiresAt            *time.Time      `json:"expires_at"`
+	CancelledAt          *time.Time      `json:"cancelled_at"`
+	CancelReason         pgtype.Text     `json:"cancel_reason"`
+	IdempotencyKey       pgtype.Text     `json:"idempotency_key"`
+	CreatedAt            time.Time       `json:"created_at"`
+	UpdatedAt            time.Time       `json:"updated_at"`
+	Version              int32           `json:"version"`
+	GuestFullName        pgtype.Text     `json:"guest_full_name"`
+	GuestPhone           pgtype.Text     `json:"guest_phone"`
+	GuestEmail           pgtype.Text     `json:"guest_email"`
+	GuestNationalityCode pgtype.Text     `json:"guest_nationality_code"`
+	GuestSpecialRequest  pgtype.Text     `json:"guest_special_request"`
+	GuestCreatedAt       *time.Time      `json:"guest_created_at"`
+}
+
+func (q *Queries) GetBookingByCustomerIdempotencyKey(ctx context.Context, arg GetBookingByCustomerIdempotencyKeyParams) (GetBookingByCustomerIdempotencyKeyRow, error) {
+	row := q.db.QueryRow(ctx, getBookingByCustomerIdempotencyKey, arg.CustomerID, arg.IdempotencyKey)
+	var i GetBookingByCustomerIdempotencyKeyRow
+	err := row.Scan(
+		&i.ID,
+		&i.ReferenceCode,
+		&i.BookingGroupID,
+		&i.CustomerID,
+		&i.RoomID,
+		&i.RoomTypeID,
+		&i.CheckIn,
+		&i.CheckOut,
+		&i.Adults,
+		&i.Children,
+		&i.Status,
+		&i.NightlyRateSnapshot,
+		&i.VatRateID,
+		&i.VatRateSnapshot,
+		&i.SubtotalAmount,
+		&i.VatAmount,
+		&i.TotalAmount,
+		&i.Currency,
+		&i.SpecialRequest,
+		&i.ExpiresAt,
+		&i.CancelledAt,
+		&i.CancelReason,
+		&i.IdempotencyKey,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Version,
+		&i.GuestFullName,
+		&i.GuestPhone,
+		&i.GuestEmail,
+		&i.GuestNationalityCode,
+		&i.GuestSpecialRequest,
+		&i.GuestCreatedAt,
+	)
+	return i, err
+}
+
+const getBookingByID = `-- name: GetBookingByID :one
+SELECT
+    b.id, b.reference_code, b.booking_group_id, b.customer_id, b.room_id, b.room_type_id,
+    lower(b.stay)::date AS check_in, upper(b.stay)::date AS check_out,
+    b.adults, b.children, b.status,
+    b.nightly_rate_snapshot, b.vat_rate_id, b.vat_rate_snapshot,
+    b.subtotal_amount, b.vat_amount, b.total_amount, b.currency,
+    b.special_request, b.expires_at, b.cancelled_at, b.cancel_reason,
+    b.idempotency_key, b.created_at, b.updated_at, b.version,
+    g.full_name AS guest_full_name, g.phone AS guest_phone, g.email AS guest_email,
+    g.nationality_code AS guest_nationality_code, g.special_request AS guest_special_request,
+    g.created_at AS guest_created_at
+FROM bookings b
+LEFT JOIN booking_guest_snapshots g ON g.booking_id = b.id
+WHERE b.id = $1
+`
+
+type GetBookingByIDRow struct {
+	ID                   uuid.UUID       `json:"id"`
+	ReferenceCode        string          `json:"reference_code"`
+	BookingGroupID       *uuid.UUID      `json:"booking_group_id"`
+	CustomerID           uuid.UUID       `json:"customer_id"`
+	RoomID               uuid.UUID       `json:"room_id"`
+	RoomTypeID           uuid.UUID       `json:"room_type_id"`
+	CheckIn              pgtype.Date     `json:"check_in"`
+	CheckOut             pgtype.Date     `json:"check_out"`
+	Adults               int16           `json:"adults"`
+	Children             int16           `json:"children"`
+	Status               string          `json:"status"`
+	NightlyRateSnapshot  decimal.Decimal `json:"nightly_rate_snapshot"`
+	VatRateID            uuid.UUID       `json:"vat_rate_id"`
+	VatRateSnapshot      decimal.Decimal `json:"vat_rate_snapshot"`
+	SubtotalAmount       decimal.Decimal `json:"subtotal_amount"`
+	VatAmount            decimal.Decimal `json:"vat_amount"`
+	TotalAmount          decimal.Decimal `json:"total_amount"`
+	Currency             string          `json:"currency"`
+	SpecialRequest       pgtype.Text     `json:"special_request"`
+	ExpiresAt            *time.Time      `json:"expires_at"`
+	CancelledAt          *time.Time      `json:"cancelled_at"`
+	CancelReason         pgtype.Text     `json:"cancel_reason"`
+	IdempotencyKey       pgtype.Text     `json:"idempotency_key"`
+	CreatedAt            time.Time       `json:"created_at"`
+	UpdatedAt            time.Time       `json:"updated_at"`
+	Version              int32           `json:"version"`
+	GuestFullName        pgtype.Text     `json:"guest_full_name"`
+	GuestPhone           pgtype.Text     `json:"guest_phone"`
+	GuestEmail           pgtype.Text     `json:"guest_email"`
+	GuestNationalityCode pgtype.Text     `json:"guest_nationality_code"`
+	GuestSpecialRequest  pgtype.Text     `json:"guest_special_request"`
+	GuestCreatedAt       *time.Time      `json:"guest_created_at"`
+}
+
+func (q *Queries) GetBookingByID(ctx context.Context, id uuid.UUID) (GetBookingByIDRow, error) {
+	row := q.db.QueryRow(ctx, getBookingByID, id)
+	var i GetBookingByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.ReferenceCode,
+		&i.BookingGroupID,
+		&i.CustomerID,
+		&i.RoomID,
+		&i.RoomTypeID,
+		&i.CheckIn,
+		&i.CheckOut,
+		&i.Adults,
+		&i.Children,
+		&i.Status,
+		&i.NightlyRateSnapshot,
+		&i.VatRateID,
+		&i.VatRateSnapshot,
+		&i.SubtotalAmount,
+		&i.VatAmount,
+		&i.TotalAmount,
+		&i.Currency,
+		&i.SpecialRequest,
+		&i.ExpiresAt,
+		&i.CancelledAt,
+		&i.CancelReason,
+		&i.IdempotencyKey,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Version,
+		&i.GuestFullName,
+		&i.GuestPhone,
+		&i.GuestEmail,
+		&i.GuestNationalityCode,
+		&i.GuestSpecialRequest,
+		&i.GuestCreatedAt,
+	)
+	return i, err
+}
+
+const getBookingByIDForUpdate = `-- name: GetBookingByIDForUpdate :one
+SELECT
+    id, reference_code, booking_group_id, customer_id, room_id, room_type_id,
+    lower(stay)::date AS check_in, upper(stay)::date AS check_out,
+    adults, children, status,
+    nightly_rate_snapshot, vat_rate_id, vat_rate_snapshot,
+    subtotal_amount, vat_amount, total_amount, currency,
+    special_request, expires_at, cancelled_at, cancel_reason,
+    idempotency_key, created_at, updated_at, version
+FROM bookings
+WHERE id = $1
+FOR UPDATE
+`
+
+type GetBookingByIDForUpdateRow struct {
+	ID                  uuid.UUID       `json:"id"`
+	ReferenceCode       string          `json:"reference_code"`
+	BookingGroupID      *uuid.UUID      `json:"booking_group_id"`
+	CustomerID          uuid.UUID       `json:"customer_id"`
+	RoomID              uuid.UUID       `json:"room_id"`
+	RoomTypeID          uuid.UUID       `json:"room_type_id"`
+	CheckIn             pgtype.Date     `json:"check_in"`
+	CheckOut            pgtype.Date     `json:"check_out"`
+	Adults              int16           `json:"adults"`
+	Children            int16           `json:"children"`
+	Status              string          `json:"status"`
+	NightlyRateSnapshot decimal.Decimal `json:"nightly_rate_snapshot"`
+	VatRateID           uuid.UUID       `json:"vat_rate_id"`
+	VatRateSnapshot     decimal.Decimal `json:"vat_rate_snapshot"`
+	SubtotalAmount      decimal.Decimal `json:"subtotal_amount"`
+	VatAmount           decimal.Decimal `json:"vat_amount"`
+	TotalAmount         decimal.Decimal `json:"total_amount"`
+	Currency            string          `json:"currency"`
+	SpecialRequest      pgtype.Text     `json:"special_request"`
+	ExpiresAt           *time.Time      `json:"expires_at"`
+	CancelledAt         *time.Time      `json:"cancelled_at"`
+	CancelReason        pgtype.Text     `json:"cancel_reason"`
+	IdempotencyKey      pgtype.Text     `json:"idempotency_key"`
+	CreatedAt           time.Time       `json:"created_at"`
+	UpdatedAt           time.Time       `json:"updated_at"`
+	Version             int32           `json:"version"`
+}
+
+func (q *Queries) GetBookingByIDForUpdate(ctx context.Context, id uuid.UUID) (GetBookingByIDForUpdateRow, error) {
+	row := q.db.QueryRow(ctx, getBookingByIDForUpdate, id)
+	var i GetBookingByIDForUpdateRow
+	err := row.Scan(
+		&i.ID,
+		&i.ReferenceCode,
+		&i.BookingGroupID,
+		&i.CustomerID,
+		&i.RoomID,
+		&i.RoomTypeID,
+		&i.CheckIn,
+		&i.CheckOut,
+		&i.Adults,
+		&i.Children,
+		&i.Status,
+		&i.NightlyRateSnapshot,
+		&i.VatRateID,
+		&i.VatRateSnapshot,
+		&i.SubtotalAmount,
+		&i.VatAmount,
+		&i.TotalAmount,
+		&i.Currency,
+		&i.SpecialRequest,
+		&i.ExpiresAt,
+		&i.CancelledAt,
+		&i.CancelReason,
+		&i.IdempotencyKey,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Version,
+	)
+	return i, err
+}
+
 const getReservationHoldByIDForUpdate = `-- name: GetReservationHoldByIDForUpdate :one
 SELECT
     id, customer_id, booking_group_id, room_id, room_type_id,
@@ -219,6 +563,183 @@ func (q *Queries) HasActiveBookingForCustomer(ctx context.Context, customerID uu
 	var has_active bool
 	err := row.Scan(&has_active)
 	return has_active, err
+}
+
+const insertBooking = `-- name: InsertBooking :one
+INSERT INTO bookings (
+    id, reference_code, booking_group_id, customer_id, room_id, room_type_id,
+    stay, adults, children, status,
+    nightly_rate_snapshot, vat_rate_id, vat_rate_snapshot,
+    subtotal_amount, vat_amount, total_amount, currency,
+    special_request, expires_at, idempotency_key, created_at, updated_at
+) VALUES (
+    $1, $2, $3, $4, $5, $6,
+    daterange($7::date, $8::date, '[)'), $9, $10, $11,
+    $12, $13, $14,
+    $15, $16, $17, $18,
+    $19, $20, $21, $22, $22
+)
+RETURNING
+    id, reference_code, booking_group_id, customer_id, room_id, room_type_id,
+    lower(stay)::date AS check_in, upper(stay)::date AS check_out,
+    adults, children, status,
+    nightly_rate_snapshot, vat_rate_id, vat_rate_snapshot,
+    subtotal_amount, vat_amount, total_amount, currency,
+    special_request, expires_at, cancelled_at, cancel_reason,
+    idempotency_key, created_at, updated_at, version
+`
+
+type InsertBookingParams struct {
+	ID                  uuid.UUID       `json:"id"`
+	ReferenceCode       string          `json:"reference_code"`
+	BookingGroupID      *uuid.UUID      `json:"booking_group_id"`
+	CustomerID          uuid.UUID       `json:"customer_id"`
+	RoomID              uuid.UUID       `json:"room_id"`
+	RoomTypeID          uuid.UUID       `json:"room_type_id"`
+	Column7             pgtype.Date     `json:"column_7"`
+	Column8             pgtype.Date     `json:"column_8"`
+	Adults              int16           `json:"adults"`
+	Children            int16           `json:"children"`
+	Status              string          `json:"status"`
+	NightlyRateSnapshot decimal.Decimal `json:"nightly_rate_snapshot"`
+	VatRateID           uuid.UUID       `json:"vat_rate_id"`
+	VatRateSnapshot     decimal.Decimal `json:"vat_rate_snapshot"`
+	SubtotalAmount      decimal.Decimal `json:"subtotal_amount"`
+	VatAmount           decimal.Decimal `json:"vat_amount"`
+	TotalAmount         decimal.Decimal `json:"total_amount"`
+	Currency            string          `json:"currency"`
+	SpecialRequest      pgtype.Text     `json:"special_request"`
+	ExpiresAt           *time.Time      `json:"expires_at"`
+	IdempotencyKey      pgtype.Text     `json:"idempotency_key"`
+	CreatedAt           time.Time       `json:"created_at"`
+}
+
+type InsertBookingRow struct {
+	ID                  uuid.UUID       `json:"id"`
+	ReferenceCode       string          `json:"reference_code"`
+	BookingGroupID      *uuid.UUID      `json:"booking_group_id"`
+	CustomerID          uuid.UUID       `json:"customer_id"`
+	RoomID              uuid.UUID       `json:"room_id"`
+	RoomTypeID          uuid.UUID       `json:"room_type_id"`
+	CheckIn             pgtype.Date     `json:"check_in"`
+	CheckOut            pgtype.Date     `json:"check_out"`
+	Adults              int16           `json:"adults"`
+	Children            int16           `json:"children"`
+	Status              string          `json:"status"`
+	NightlyRateSnapshot decimal.Decimal `json:"nightly_rate_snapshot"`
+	VatRateID           uuid.UUID       `json:"vat_rate_id"`
+	VatRateSnapshot     decimal.Decimal `json:"vat_rate_snapshot"`
+	SubtotalAmount      decimal.Decimal `json:"subtotal_amount"`
+	VatAmount           decimal.Decimal `json:"vat_amount"`
+	TotalAmount         decimal.Decimal `json:"total_amount"`
+	Currency            string          `json:"currency"`
+	SpecialRequest      pgtype.Text     `json:"special_request"`
+	ExpiresAt           *time.Time      `json:"expires_at"`
+	CancelledAt         *time.Time      `json:"cancelled_at"`
+	CancelReason        pgtype.Text     `json:"cancel_reason"`
+	IdempotencyKey      pgtype.Text     `json:"idempotency_key"`
+	CreatedAt           time.Time       `json:"created_at"`
+	UpdatedAt           time.Time       `json:"updated_at"`
+	Version             int32           `json:"version"`
+}
+
+func (q *Queries) InsertBooking(ctx context.Context, arg InsertBookingParams) (InsertBookingRow, error) {
+	row := q.db.QueryRow(ctx, insertBooking,
+		arg.ID,
+		arg.ReferenceCode,
+		arg.BookingGroupID,
+		arg.CustomerID,
+		arg.RoomID,
+		arg.RoomTypeID,
+		arg.Column7,
+		arg.Column8,
+		arg.Adults,
+		arg.Children,
+		arg.Status,
+		arg.NightlyRateSnapshot,
+		arg.VatRateID,
+		arg.VatRateSnapshot,
+		arg.SubtotalAmount,
+		arg.VatAmount,
+		arg.TotalAmount,
+		arg.Currency,
+		arg.SpecialRequest,
+		arg.ExpiresAt,
+		arg.IdempotencyKey,
+		arg.CreatedAt,
+	)
+	var i InsertBookingRow
+	err := row.Scan(
+		&i.ID,
+		&i.ReferenceCode,
+		&i.BookingGroupID,
+		&i.CustomerID,
+		&i.RoomID,
+		&i.RoomTypeID,
+		&i.CheckIn,
+		&i.CheckOut,
+		&i.Adults,
+		&i.Children,
+		&i.Status,
+		&i.NightlyRateSnapshot,
+		&i.VatRateID,
+		&i.VatRateSnapshot,
+		&i.SubtotalAmount,
+		&i.VatAmount,
+		&i.TotalAmount,
+		&i.Currency,
+		&i.SpecialRequest,
+		&i.ExpiresAt,
+		&i.CancelledAt,
+		&i.CancelReason,
+		&i.IdempotencyKey,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Version,
+	)
+	return i, err
+}
+
+const insertBookingGuestSnapshot = `-- name: InsertBookingGuestSnapshot :one
+INSERT INTO booking_guest_snapshots (
+    booking_id, full_name, phone, email, nationality_code, special_request, created_at
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7
+)
+RETURNING booking_id, full_name, phone, email, nationality_code, special_request, created_at
+`
+
+type InsertBookingGuestSnapshotParams struct {
+	BookingID       uuid.UUID   `json:"booking_id"`
+	FullName        string      `json:"full_name"`
+	Phone           string      `json:"phone"`
+	Email           pgtype.Text `json:"email"`
+	NationalityCode pgtype.Text `json:"nationality_code"`
+	SpecialRequest  pgtype.Text `json:"special_request"`
+	CreatedAt       time.Time   `json:"created_at"`
+}
+
+func (q *Queries) InsertBookingGuestSnapshot(ctx context.Context, arg InsertBookingGuestSnapshotParams) (BookingGuestSnapshot, error) {
+	row := q.db.QueryRow(ctx, insertBookingGuestSnapshot,
+		arg.BookingID,
+		arg.FullName,
+		arg.Phone,
+		arg.Email,
+		arg.NationalityCode,
+		arg.SpecialRequest,
+		arg.CreatedAt,
+	)
+	var i BookingGuestSnapshot
+	err := row.Scan(
+		&i.BookingID,
+		&i.FullName,
+		&i.Phone,
+		&i.Email,
+		&i.NationalityCode,
+		&i.SpecialRequest,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const insertBookingStatusHistory = `-- name: InsertBookingStatusHistory :exec
@@ -403,6 +924,238 @@ func (q *Queries) ListActiveNonExpiredHolds(ctx context.Context, expiresAt time.
 			&i.ReleasedReason,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listBookingsByGroupID = `-- name: ListBookingsByGroupID :many
+SELECT
+    b.id, b.reference_code, b.booking_group_id, b.customer_id, b.room_id, b.room_type_id,
+    lower(b.stay)::date AS check_in, upper(b.stay)::date AS check_out,
+    b.adults, b.children, b.status,
+    b.nightly_rate_snapshot, b.vat_rate_id, b.vat_rate_snapshot,
+    b.subtotal_amount, b.vat_amount, b.total_amount, b.currency,
+    b.special_request, b.expires_at, b.cancelled_at, b.cancel_reason,
+    b.idempotency_key, b.created_at, b.updated_at, b.version,
+    g.full_name AS guest_full_name, g.phone AS guest_phone, g.email AS guest_email,
+    g.nationality_code AS guest_nationality_code, g.special_request AS guest_special_request,
+    g.created_at AS guest_created_at
+FROM bookings b
+LEFT JOIN booking_guest_snapshots g ON g.booking_id = b.id
+WHERE b.booking_group_id = $1
+ORDER BY b.id ASC
+`
+
+type ListBookingsByGroupIDRow struct {
+	ID                   uuid.UUID       `json:"id"`
+	ReferenceCode        string          `json:"reference_code"`
+	BookingGroupID       *uuid.UUID      `json:"booking_group_id"`
+	CustomerID           uuid.UUID       `json:"customer_id"`
+	RoomID               uuid.UUID       `json:"room_id"`
+	RoomTypeID           uuid.UUID       `json:"room_type_id"`
+	CheckIn              pgtype.Date     `json:"check_in"`
+	CheckOut             pgtype.Date     `json:"check_out"`
+	Adults               int16           `json:"adults"`
+	Children             int16           `json:"children"`
+	Status               string          `json:"status"`
+	NightlyRateSnapshot  decimal.Decimal `json:"nightly_rate_snapshot"`
+	VatRateID            uuid.UUID       `json:"vat_rate_id"`
+	VatRateSnapshot      decimal.Decimal `json:"vat_rate_snapshot"`
+	SubtotalAmount       decimal.Decimal `json:"subtotal_amount"`
+	VatAmount            decimal.Decimal `json:"vat_amount"`
+	TotalAmount          decimal.Decimal `json:"total_amount"`
+	Currency             string          `json:"currency"`
+	SpecialRequest       pgtype.Text     `json:"special_request"`
+	ExpiresAt            *time.Time      `json:"expires_at"`
+	CancelledAt          *time.Time      `json:"cancelled_at"`
+	CancelReason         pgtype.Text     `json:"cancel_reason"`
+	IdempotencyKey       pgtype.Text     `json:"idempotency_key"`
+	CreatedAt            time.Time       `json:"created_at"`
+	UpdatedAt            time.Time       `json:"updated_at"`
+	Version              int32           `json:"version"`
+	GuestFullName        pgtype.Text     `json:"guest_full_name"`
+	GuestPhone           pgtype.Text     `json:"guest_phone"`
+	GuestEmail           pgtype.Text     `json:"guest_email"`
+	GuestNationalityCode pgtype.Text     `json:"guest_nationality_code"`
+	GuestSpecialRequest  pgtype.Text     `json:"guest_special_request"`
+	GuestCreatedAt       *time.Time      `json:"guest_created_at"`
+}
+
+func (q *Queries) ListBookingsByGroupID(ctx context.Context, bookingGroupID *uuid.UUID) ([]ListBookingsByGroupIDRow, error) {
+	rows, err := q.db.Query(ctx, listBookingsByGroupID, bookingGroupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListBookingsByGroupIDRow{}
+	for rows.Next() {
+		var i ListBookingsByGroupIDRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ReferenceCode,
+			&i.BookingGroupID,
+			&i.CustomerID,
+			&i.RoomID,
+			&i.RoomTypeID,
+			&i.CheckIn,
+			&i.CheckOut,
+			&i.Adults,
+			&i.Children,
+			&i.Status,
+			&i.NightlyRateSnapshot,
+			&i.VatRateID,
+			&i.VatRateSnapshot,
+			&i.SubtotalAmount,
+			&i.VatAmount,
+			&i.TotalAmount,
+			&i.Currency,
+			&i.SpecialRequest,
+			&i.ExpiresAt,
+			&i.CancelledAt,
+			&i.CancelReason,
+			&i.IdempotencyKey,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Version,
+			&i.GuestFullName,
+			&i.GuestPhone,
+			&i.GuestEmail,
+			&i.GuestNationalityCode,
+			&i.GuestSpecialRequest,
+			&i.GuestCreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listBookingsFiltered = `-- name: ListBookingsFiltered :many
+SELECT
+    b.id, b.reference_code, b.booking_group_id, b.customer_id, b.room_id, b.room_type_id,
+    lower(b.stay)::date AS check_in, upper(b.stay)::date AS check_out,
+    b.adults, b.children, b.status,
+    b.nightly_rate_snapshot, b.vat_rate_id, b.vat_rate_snapshot,
+    b.subtotal_amount, b.vat_amount, b.total_amount, b.currency,
+    b.special_request, b.expires_at, b.cancelled_at, b.cancel_reason,
+    b.idempotency_key, b.created_at, b.updated_at, b.version,
+    g.full_name AS guest_full_name, g.phone AS guest_phone, g.email AS guest_email,
+    g.nationality_code AS guest_nationality_code, g.special_request AS guest_special_request,
+    g.created_at AS guest_created_at
+FROM bookings b
+LEFT JOIN booking_guest_snapshots g ON g.booking_id = b.id
+WHERE ($1::uuid IS NULL OR b.customer_id = $1::uuid)
+  AND ($2::uuid IS NULL OR b.booking_group_id = $2::uuid)
+  AND ($3::text = '' OR b.status = $3::text)
+  AND ($4::timestamptz IS NULL OR (b.created_at, b.id) < ($4::timestamptz, $5::uuid))
+ORDER BY b.created_at DESC, b.id DESC
+LIMIT $6
+`
+
+type ListBookingsFilteredParams struct {
+	CustomerID      *uuid.UUID `json:"customer_id"`
+	BookingGroupID  *uuid.UUID `json:"booking_group_id"`
+	Status          string     `json:"status"`
+	CursorCreatedAt *time.Time `json:"cursor_created_at"`
+	CursorID        *uuid.UUID `json:"cursor_id"`
+	LimitRows       int32      `json:"limit_rows"`
+}
+
+type ListBookingsFilteredRow struct {
+	ID                   uuid.UUID       `json:"id"`
+	ReferenceCode        string          `json:"reference_code"`
+	BookingGroupID       *uuid.UUID      `json:"booking_group_id"`
+	CustomerID           uuid.UUID       `json:"customer_id"`
+	RoomID               uuid.UUID       `json:"room_id"`
+	RoomTypeID           uuid.UUID       `json:"room_type_id"`
+	CheckIn              pgtype.Date     `json:"check_in"`
+	CheckOut             pgtype.Date     `json:"check_out"`
+	Adults               int16           `json:"adults"`
+	Children             int16           `json:"children"`
+	Status               string          `json:"status"`
+	NightlyRateSnapshot  decimal.Decimal `json:"nightly_rate_snapshot"`
+	VatRateID            uuid.UUID       `json:"vat_rate_id"`
+	VatRateSnapshot      decimal.Decimal `json:"vat_rate_snapshot"`
+	SubtotalAmount       decimal.Decimal `json:"subtotal_amount"`
+	VatAmount            decimal.Decimal `json:"vat_amount"`
+	TotalAmount          decimal.Decimal `json:"total_amount"`
+	Currency             string          `json:"currency"`
+	SpecialRequest       pgtype.Text     `json:"special_request"`
+	ExpiresAt            *time.Time      `json:"expires_at"`
+	CancelledAt          *time.Time      `json:"cancelled_at"`
+	CancelReason         pgtype.Text     `json:"cancel_reason"`
+	IdempotencyKey       pgtype.Text     `json:"idempotency_key"`
+	CreatedAt            time.Time       `json:"created_at"`
+	UpdatedAt            time.Time       `json:"updated_at"`
+	Version              int32           `json:"version"`
+	GuestFullName        pgtype.Text     `json:"guest_full_name"`
+	GuestPhone           pgtype.Text     `json:"guest_phone"`
+	GuestEmail           pgtype.Text     `json:"guest_email"`
+	GuestNationalityCode pgtype.Text     `json:"guest_nationality_code"`
+	GuestSpecialRequest  pgtype.Text     `json:"guest_special_request"`
+	GuestCreatedAt       *time.Time      `json:"guest_created_at"`
+}
+
+func (q *Queries) ListBookingsFiltered(ctx context.Context, arg ListBookingsFilteredParams) ([]ListBookingsFilteredRow, error) {
+	rows, err := q.db.Query(ctx, listBookingsFiltered,
+		arg.CustomerID,
+		arg.BookingGroupID,
+		arg.Status,
+		arg.CursorCreatedAt,
+		arg.CursorID,
+		arg.LimitRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListBookingsFilteredRow{}
+	for rows.Next() {
+		var i ListBookingsFilteredRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ReferenceCode,
+			&i.BookingGroupID,
+			&i.CustomerID,
+			&i.RoomID,
+			&i.RoomTypeID,
+			&i.CheckIn,
+			&i.CheckOut,
+			&i.Adults,
+			&i.Children,
+			&i.Status,
+			&i.NightlyRateSnapshot,
+			&i.VatRateID,
+			&i.VatRateSnapshot,
+			&i.SubtotalAmount,
+			&i.VatAmount,
+			&i.TotalAmount,
+			&i.Currency,
+			&i.SpecialRequest,
+			&i.ExpiresAt,
+			&i.CancelledAt,
+			&i.CancelReason,
+			&i.IdempotencyKey,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Version,
+			&i.GuestFullName,
+			&i.GuestPhone,
+			&i.GuestEmail,
+			&i.GuestNationalityCode,
+			&i.GuestSpecialRequest,
+			&i.GuestCreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -626,6 +1379,263 @@ type UpdateBookingGroupStatusParams struct {
 func (q *Queries) UpdateBookingGroupStatus(ctx context.Context, arg UpdateBookingGroupStatusParams) error {
 	_, err := q.db.Exec(ctx, updateBookingGroupStatus, arg.ID, arg.Status, arg.UpdatedAt)
 	return err
+}
+
+const updateBookingStatusCheckedIn = `-- name: UpdateBookingStatusCheckedIn :one
+UPDATE bookings
+SET status = 'checked_in',
+    expires_at = NULL,
+    updated_at = $2,
+    version = version + 1
+WHERE id = $1
+  AND status = 'confirmed'
+RETURNING
+    id, reference_code, booking_group_id, customer_id, room_id, room_type_id,
+    lower(stay)::date AS check_in, upper(stay)::date AS check_out,
+    adults, children, status,
+    nightly_rate_snapshot, vat_rate_id, vat_rate_snapshot,
+    subtotal_amount, vat_amount, total_amount, currency,
+    special_request, expires_at, cancelled_at, cancel_reason,
+    idempotency_key, created_at, updated_at, version
+`
+
+type UpdateBookingStatusCheckedInParams struct {
+	ID        uuid.UUID `json:"id"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type UpdateBookingStatusCheckedInRow struct {
+	ID                  uuid.UUID       `json:"id"`
+	ReferenceCode       string          `json:"reference_code"`
+	BookingGroupID      *uuid.UUID      `json:"booking_group_id"`
+	CustomerID          uuid.UUID       `json:"customer_id"`
+	RoomID              uuid.UUID       `json:"room_id"`
+	RoomTypeID          uuid.UUID       `json:"room_type_id"`
+	CheckIn             pgtype.Date     `json:"check_in"`
+	CheckOut            pgtype.Date     `json:"check_out"`
+	Adults              int16           `json:"adults"`
+	Children            int16           `json:"children"`
+	Status              string          `json:"status"`
+	NightlyRateSnapshot decimal.Decimal `json:"nightly_rate_snapshot"`
+	VatRateID           uuid.UUID       `json:"vat_rate_id"`
+	VatRateSnapshot     decimal.Decimal `json:"vat_rate_snapshot"`
+	SubtotalAmount      decimal.Decimal `json:"subtotal_amount"`
+	VatAmount           decimal.Decimal `json:"vat_amount"`
+	TotalAmount         decimal.Decimal `json:"total_amount"`
+	Currency            string          `json:"currency"`
+	SpecialRequest      pgtype.Text     `json:"special_request"`
+	ExpiresAt           *time.Time      `json:"expires_at"`
+	CancelledAt         *time.Time      `json:"cancelled_at"`
+	CancelReason        pgtype.Text     `json:"cancel_reason"`
+	IdempotencyKey      pgtype.Text     `json:"idempotency_key"`
+	CreatedAt           time.Time       `json:"created_at"`
+	UpdatedAt           time.Time       `json:"updated_at"`
+	Version             int32           `json:"version"`
+}
+
+func (q *Queries) UpdateBookingStatusCheckedIn(ctx context.Context, arg UpdateBookingStatusCheckedInParams) (UpdateBookingStatusCheckedInRow, error) {
+	row := q.db.QueryRow(ctx, updateBookingStatusCheckedIn, arg.ID, arg.UpdatedAt)
+	var i UpdateBookingStatusCheckedInRow
+	err := row.Scan(
+		&i.ID,
+		&i.ReferenceCode,
+		&i.BookingGroupID,
+		&i.CustomerID,
+		&i.RoomID,
+		&i.RoomTypeID,
+		&i.CheckIn,
+		&i.CheckOut,
+		&i.Adults,
+		&i.Children,
+		&i.Status,
+		&i.NightlyRateSnapshot,
+		&i.VatRateID,
+		&i.VatRateSnapshot,
+		&i.SubtotalAmount,
+		&i.VatAmount,
+		&i.TotalAmount,
+		&i.Currency,
+		&i.SpecialRequest,
+		&i.ExpiresAt,
+		&i.CancelledAt,
+		&i.CancelReason,
+		&i.IdempotencyKey,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Version,
+	)
+	return i, err
+}
+
+const updateBookingStatusCheckedOut = `-- name: UpdateBookingStatusCheckedOut :one
+UPDATE bookings
+SET status = 'checked_out',
+    updated_at = $2,
+    version = version + 1
+WHERE id = $1
+  AND status = 'checked_in'
+RETURNING
+    id, reference_code, booking_group_id, customer_id, room_id, room_type_id,
+    lower(stay)::date AS check_in, upper(stay)::date AS check_out,
+    adults, children, status,
+    nightly_rate_snapshot, vat_rate_id, vat_rate_snapshot,
+    subtotal_amount, vat_amount, total_amount, currency,
+    special_request, expires_at, cancelled_at, cancel_reason,
+    idempotency_key, created_at, updated_at, version
+`
+
+type UpdateBookingStatusCheckedOutParams struct {
+	ID        uuid.UUID `json:"id"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type UpdateBookingStatusCheckedOutRow struct {
+	ID                  uuid.UUID       `json:"id"`
+	ReferenceCode       string          `json:"reference_code"`
+	BookingGroupID      *uuid.UUID      `json:"booking_group_id"`
+	CustomerID          uuid.UUID       `json:"customer_id"`
+	RoomID              uuid.UUID       `json:"room_id"`
+	RoomTypeID          uuid.UUID       `json:"room_type_id"`
+	CheckIn             pgtype.Date     `json:"check_in"`
+	CheckOut            pgtype.Date     `json:"check_out"`
+	Adults              int16           `json:"adults"`
+	Children            int16           `json:"children"`
+	Status              string          `json:"status"`
+	NightlyRateSnapshot decimal.Decimal `json:"nightly_rate_snapshot"`
+	VatRateID           uuid.UUID       `json:"vat_rate_id"`
+	VatRateSnapshot     decimal.Decimal `json:"vat_rate_snapshot"`
+	SubtotalAmount      decimal.Decimal `json:"subtotal_amount"`
+	VatAmount           decimal.Decimal `json:"vat_amount"`
+	TotalAmount         decimal.Decimal `json:"total_amount"`
+	Currency            string          `json:"currency"`
+	SpecialRequest      pgtype.Text     `json:"special_request"`
+	ExpiresAt           *time.Time      `json:"expires_at"`
+	CancelledAt         *time.Time      `json:"cancelled_at"`
+	CancelReason        pgtype.Text     `json:"cancel_reason"`
+	IdempotencyKey      pgtype.Text     `json:"idempotency_key"`
+	CreatedAt           time.Time       `json:"created_at"`
+	UpdatedAt           time.Time       `json:"updated_at"`
+	Version             int32           `json:"version"`
+}
+
+func (q *Queries) UpdateBookingStatusCheckedOut(ctx context.Context, arg UpdateBookingStatusCheckedOutParams) (UpdateBookingStatusCheckedOutRow, error) {
+	row := q.db.QueryRow(ctx, updateBookingStatusCheckedOut, arg.ID, arg.UpdatedAt)
+	var i UpdateBookingStatusCheckedOutRow
+	err := row.Scan(
+		&i.ID,
+		&i.ReferenceCode,
+		&i.BookingGroupID,
+		&i.CustomerID,
+		&i.RoomID,
+		&i.RoomTypeID,
+		&i.CheckIn,
+		&i.CheckOut,
+		&i.Adults,
+		&i.Children,
+		&i.Status,
+		&i.NightlyRateSnapshot,
+		&i.VatRateID,
+		&i.VatRateSnapshot,
+		&i.SubtotalAmount,
+		&i.VatAmount,
+		&i.TotalAmount,
+		&i.Currency,
+		&i.SpecialRequest,
+		&i.ExpiresAt,
+		&i.CancelledAt,
+		&i.CancelReason,
+		&i.IdempotencyKey,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Version,
+	)
+	return i, err
+}
+
+const updateBookingStatusConfirmed = `-- name: UpdateBookingStatusConfirmed :one
+UPDATE bookings
+SET status = 'confirmed',
+    expires_at = NULL,
+    updated_at = $2,
+    version = version + 1
+WHERE id = $1
+  AND status = 'pending'
+RETURNING
+    id, reference_code, booking_group_id, customer_id, room_id, room_type_id,
+    lower(stay)::date AS check_in, upper(stay)::date AS check_out,
+    adults, children, status,
+    nightly_rate_snapshot, vat_rate_id, vat_rate_snapshot,
+    subtotal_amount, vat_amount, total_amount, currency,
+    special_request, expires_at, cancelled_at, cancel_reason,
+    idempotency_key, created_at, updated_at, version
+`
+
+type UpdateBookingStatusConfirmedParams struct {
+	ID        uuid.UUID `json:"id"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type UpdateBookingStatusConfirmedRow struct {
+	ID                  uuid.UUID       `json:"id"`
+	ReferenceCode       string          `json:"reference_code"`
+	BookingGroupID      *uuid.UUID      `json:"booking_group_id"`
+	CustomerID          uuid.UUID       `json:"customer_id"`
+	RoomID              uuid.UUID       `json:"room_id"`
+	RoomTypeID          uuid.UUID       `json:"room_type_id"`
+	CheckIn             pgtype.Date     `json:"check_in"`
+	CheckOut            pgtype.Date     `json:"check_out"`
+	Adults              int16           `json:"adults"`
+	Children            int16           `json:"children"`
+	Status              string          `json:"status"`
+	NightlyRateSnapshot decimal.Decimal `json:"nightly_rate_snapshot"`
+	VatRateID           uuid.UUID       `json:"vat_rate_id"`
+	VatRateSnapshot     decimal.Decimal `json:"vat_rate_snapshot"`
+	SubtotalAmount      decimal.Decimal `json:"subtotal_amount"`
+	VatAmount           decimal.Decimal `json:"vat_amount"`
+	TotalAmount         decimal.Decimal `json:"total_amount"`
+	Currency            string          `json:"currency"`
+	SpecialRequest      pgtype.Text     `json:"special_request"`
+	ExpiresAt           *time.Time      `json:"expires_at"`
+	CancelledAt         *time.Time      `json:"cancelled_at"`
+	CancelReason        pgtype.Text     `json:"cancel_reason"`
+	IdempotencyKey      pgtype.Text     `json:"idempotency_key"`
+	CreatedAt           time.Time       `json:"created_at"`
+	UpdatedAt           time.Time       `json:"updated_at"`
+	Version             int32           `json:"version"`
+}
+
+func (q *Queries) UpdateBookingStatusConfirmed(ctx context.Context, arg UpdateBookingStatusConfirmedParams) (UpdateBookingStatusConfirmedRow, error) {
+	row := q.db.QueryRow(ctx, updateBookingStatusConfirmed, arg.ID, arg.UpdatedAt)
+	var i UpdateBookingStatusConfirmedRow
+	err := row.Scan(
+		&i.ID,
+		&i.ReferenceCode,
+		&i.BookingGroupID,
+		&i.CustomerID,
+		&i.RoomID,
+		&i.RoomTypeID,
+		&i.CheckIn,
+		&i.CheckOut,
+		&i.Adults,
+		&i.Children,
+		&i.Status,
+		&i.NightlyRateSnapshot,
+		&i.VatRateID,
+		&i.VatRateSnapshot,
+		&i.SubtotalAmount,
+		&i.VatAmount,
+		&i.TotalAmount,
+		&i.Currency,
+		&i.SpecialRequest,
+		&i.ExpiresAt,
+		&i.CancelledAt,
+		&i.CancelReason,
+		&i.IdempotencyKey,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Version,
+	)
+	return i, err
 }
 
 const updateReservationHoldsStatus = `-- name: UpdateReservationHoldsStatus :exec
