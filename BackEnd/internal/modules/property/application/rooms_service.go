@@ -128,10 +128,18 @@ func (s *Service) SearchPublicCatalog(ctx context.Context, filter PublicCatalogF
 			Message: "must be greater than or equal to minPrice",
 		})
 	}
+	var (
+		hasDateFilter bool
+		checkInDate   time.Time
+		checkOutDate  time.Time
+	)
 	if filter.CheckIn != "" || filter.CheckOut != "" {
-		if err := validateOptionalDateRange(filter.CheckIn, filter.CheckOut); err != nil {
+		var err error
+		checkInDate, checkOutDate, err = parseOptionalDateRange(filter.CheckIn, filter.CheckOut)
+		if err != nil {
 			return platformhttp.PageResponse[domain.RoomType]{}, err
 		}
+		hasDateFilter = true
 	}
 
 	sortMode := strings.TrimSpace(filter.Sort)
@@ -161,6 +169,26 @@ func (s *Service) SearchPublicCatalog(ctx context.Context, filter PublicCatalogF
 	})
 	if err != nil {
 		return platformhttp.PageResponse[domain.RoomType]{}, err
+	}
+	if hasDateFilter && s.availability != nil && len(items) > 0 {
+		ids := make([]uuid.UUID, 0, len(items))
+		for _, item := range items {
+			ids = append(ids, item.ID)
+		}
+		availMap, err := s.availability.CountAvailableRoomsByType(ctx, ids, checkInDate, checkOutDate)
+		if err != nil {
+			return platformhttp.PageResponse[domain.RoomType]{}, err
+		}
+		filtered := make([]domain.RoomType, 0, len(items))
+		for _, item := range items {
+			cnt := availMap[item.ID]
+			if cnt > 0 {
+				c := cnt
+				item.AvailableRoomCount = &c
+				filtered = append(filtered, item)
+			}
+		}
+		items = filtered
 	}
 	s.enrichRoomTypesMedia(ctx, items)
 
@@ -774,34 +802,36 @@ func selectCoverURL(items []domain.MediaItem) string {
 	return ""
 }
 
-func validateOptionalDateRange(checkInRaw, checkOutRaw string) error {
+func parseOptionalDateRange(checkInRaw, checkOutRaw string) (time.Time, time.Time, error) {
 	if checkInRaw == "" || checkOutRaw == "" {
-		return apperror.Validation("both checkIn and checkOut are required when filtering by dates", apperror.FieldError{
+		return time.Time{}, time.Time{}, apperror.Validation("both checkIn and checkOut are required when filtering by dates", apperror.FieldError{
 			Field:   "checkIn",
 			Message: "provide both checkIn and checkOut in YYYY-MM-DD format",
 		})
 	}
 	inDate, err := time.Parse("2006-01-02", strings.TrimSpace(checkInRaw))
 	if err != nil {
-		return apperror.Validation("invalid checkIn date", apperror.FieldError{
+		return time.Time{}, time.Time{}, apperror.Validation("invalid checkIn date", apperror.FieldError{
 			Field:   "checkIn",
 			Message: "must be in YYYY-MM-DD format",
 		})
 	}
 	outDate, err := time.Parse("2006-01-02", strings.TrimSpace(checkOutRaw))
 	if err != nil {
-		return apperror.Validation("invalid checkOut date", apperror.FieldError{
+		return time.Time{}, time.Time{}, apperror.Validation("invalid checkOut date", apperror.FieldError{
 			Field:   "checkOut",
 			Message: "must be in YYYY-MM-DD format",
 		})
 	}
 	if !outDate.After(inDate) {
-		return apperror.Validation("invalid stay date range", apperror.FieldError{
+		return time.Time{}, time.Time{}, apperror.Validation("invalid stay date range", apperror.FieldError{
 			Field:   "checkOut",
 			Message: "must be after checkIn",
 		})
 	}
-	return nil
+	return time.Date(inDate.Year(), inDate.Month(), inDate.Day(), 0, 0, 0, 0, time.UTC),
+		time.Date(outDate.Year(), outDate.Month(), outDate.Day(), 0, 0, 0, 0, time.UTC),
+		nil
 }
 
 func roomTypeAuditMap(rt domain.RoomType) map[string]any {

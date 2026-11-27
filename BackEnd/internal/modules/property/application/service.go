@@ -50,6 +50,12 @@ type MediaResolver interface {
 	ListMediaByRoomIDs(ctx context.Context, roomIDs []uuid.UUID) (map[uuid.UUID][]MediaItem, error)
 }
 
+// AvailabilityReader is an optional consumer-side port implemented by the booking module (T3.1)
+// so public catalog search can filter room types by live availability without creating a circular dependency.
+type AvailabilityReader interface {
+	CountAvailableRoomsByType(ctx context.Context, roomTypeIDs []uuid.UUID, checkIn, checkOut time.Time) (map[uuid.UUID]int, error)
+}
+
 // Repository defines the persistence contract for the property module.
 type Repository interface {
 	GetHotelSettings(ctx context.Context) (domain.HotelSettings, error)
@@ -104,13 +110,14 @@ type UpdateSettingsParams struct {
 
 // Service implements hotel settings and property catalog/operational workflows.
 type Service struct {
-	txRunner db.TxRunner
-	repo     Repository
-	authz    rbacapp.Authorizer
-	audit    auditapp.Recorder
-	media    MediaResolver
-	clk      clock.Clock
-	ids      id.Generator
+	txRunner     db.TxRunner
+	repo         Repository
+	authz        rbacapp.Authorizer
+	audit        auditapp.Recorder
+	media        MediaResolver
+	availability AvailabilityReader
+	clk          clock.Clock
+	ids          id.Generator
 }
 
 // Compile-time interface assertion.
@@ -144,6 +151,11 @@ func NewService(
 // SetMediaResolver wires the media URL resolver once the media module is initialized.
 func (s *Service) SetMediaResolver(resolver MediaResolver) {
 	s.media = resolver
+}
+
+// SetAvailabilityReader wires the booking availability reader once the booking module is initialized.
+func (s *Service) SetAvailabilityReader(reader AvailabilityReader) {
+	s.availability = reader
 }
 
 // GetSettings returns the full hotel settings, resolving LogoURL if configured.

@@ -49,6 +49,67 @@ type AuthSession struct {
 	UserAgentHash    []byte     `json:"user_agent_hash"`
 }
 
+type Booking struct {
+	ID                  uuid.UUID                 `json:"id"`
+	ReferenceCode       string                    `json:"reference_code"`
+	BookingGroupID      *uuid.UUID                `json:"booking_group_id"`
+	CustomerID          uuid.UUID                 `json:"customer_id"`
+	RoomID              uuid.UUID                 `json:"room_id"`
+	RoomTypeID          uuid.UUID                 `json:"room_type_id"`
+	Stay                pgtype.Range[pgtype.Date] `json:"stay"`
+	Adults              int16                     `json:"adults"`
+	Children            int16                     `json:"children"`
+	Status              string                    `json:"status"`
+	NightlyRateSnapshot decimal.Decimal           `json:"nightly_rate_snapshot"`
+	VatRateID           uuid.UUID                 `json:"vat_rate_id"`
+	VatRateSnapshot     decimal.Decimal           `json:"vat_rate_snapshot"`
+	SubtotalAmount      decimal.Decimal           `json:"subtotal_amount"`
+	VatAmount           decimal.Decimal           `json:"vat_amount"`
+	TotalAmount         decimal.Decimal           `json:"total_amount"`
+	Currency            string                    `json:"currency"`
+	SpecialRequest      pgtype.Text               `json:"special_request"`
+	ExpiresAt           *time.Time                `json:"expires_at"`
+	CancelledAt         *time.Time                `json:"cancelled_at"`
+	CancelReason        pgtype.Text               `json:"cancel_reason"`
+	IdempotencyKey      pgtype.Text               `json:"idempotency_key"`
+	CreatedAt           time.Time                 `json:"created_at"`
+	UpdatedAt           time.Time                 `json:"updated_at"`
+	Version             int32                     `json:"version"`
+}
+
+type BookingGroup struct {
+	ID             uuid.UUID   `json:"id"`
+	ReferenceCode  string      `json:"reference_code"`
+	CustomerID     uuid.UUID   `json:"customer_id"`
+	Status         string      `json:"status"`
+	ExpiresAt      *time.Time  `json:"expires_at"`
+	IdempotencyKey pgtype.Text `json:"idempotency_key"`
+	CreatedAt      time.Time   `json:"created_at"`
+	UpdatedAt      time.Time   `json:"updated_at"`
+	Version        int32       `json:"version"`
+}
+
+type BookingGuestSnapshot struct {
+	BookingID       uuid.UUID   `json:"booking_id"`
+	FullName        string      `json:"full_name"`
+	Phone           string      `json:"phone"`
+	Email           pgtype.Text `json:"email"`
+	NationalityCode pgtype.Text `json:"nationality_code"`
+	SpecialRequest  pgtype.Text `json:"special_request"`
+	CreatedAt       time.Time   `json:"created_at"`
+}
+
+type BookingStatusHistory struct {
+	ID            uuid.UUID   `json:"id"`
+	BookingID     uuid.UUID   `json:"booking_id"`
+	FromStatus    pgtype.Text `json:"from_status"`
+	ToStatus      string      `json:"to_status"`
+	ActorUserID   *uuid.UUID  `json:"actor_user_id"`
+	Reason        pgtype.Text `json:"reason"`
+	CorrelationID *uuid.UUID  `json:"correlation_id"`
+	OccurredAt    time.Time   `json:"occurred_at"`
+}
+
 type Customer struct {
 	ID              uuid.UUID   `json:"id"`
 	UserID          *uuid.UUID  `json:"user_id"`
@@ -142,6 +203,24 @@ type Permission struct {
 	Description pgtype.Text `json:"description"`
 	IsSystem    bool        `json:"is_system"`
 	ArchivedAt  *time.Time  `json:"archived_at"`
+}
+
+type ReservationHold struct {
+	ID             uuid.UUID                 `json:"id"`
+	CustomerID     uuid.UUID                 `json:"customer_id"`
+	BookingGroupID *uuid.UUID                `json:"booking_group_id"`
+	RoomID         uuid.UUID                 `json:"room_id"`
+	RoomTypeID     uuid.UUID                 `json:"room_type_id"`
+	Stay           pgtype.Range[pgtype.Date] `json:"stay"`
+	HoldMode       string                    `json:"hold_mode"`
+	HoldToken      string                    `json:"hold_token"`
+	RedisKey       string                    `json:"redis_key"`
+	TtlSeconds     int32                     `json:"ttl_seconds"`
+	Status         string                    `json:"status"`
+	ExpiresAt      time.Time                 `json:"expires_at"`
+	ReleasedReason pgtype.Text               `json:"released_reason"`
+	CreatedAt      time.Time                 `json:"created_at"`
+	UpdatedAt      time.Time                 `json:"updated_at"`
 }
 
 type Role struct {

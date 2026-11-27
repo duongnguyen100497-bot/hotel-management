@@ -39,6 +39,7 @@ type RoomType struct {
 	Amenities            []string         `json:"amenities"`
 	IsBookable           bool             `json:"isBookable"`
 	OperationalRoomCount int              `json:"operationalRoomCount,omitempty"`
+	AvailableRoomCount   *int             `json:"availableRoomCount,omitempty"`
 	CoverURL             string           `json:"coverUrl,omitempty"`
 	Media                []MediaItem      `json:"media,omitempty"`
 	ArchivedAt           *time.Time       `json:"archivedAt,omitempty"`

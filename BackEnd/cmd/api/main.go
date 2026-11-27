@@ -19,6 +19,9 @@ import (
 	"github.com/gin-gonic/gin"
 	auditapp "github.com/trandinh0506/hotel-management/backend/internal/modules/audit/application"
 	auditpg "github.com/trandinh0506/hotel-management/backend/internal/modules/audit/persistence/postgres"
+	bookingapp "github.com/trandinh0506/hotel-management/backend/internal/modules/booking/application"
+	bookinghttp "github.com/trandinh0506/hotel-management/backend/internal/modules/booking/delivery/http"
+	bookingpg "github.com/trandinh0506/hotel-management/backend/internal/modules/booking/persistence/postgres"
 	identityapp "github.com/trandinh0506/hotel-management/backend/internal/modules/identity/application"
 	identityhttp "github.com/trandinh0506/hotel-management/backend/internal/modules/identity/delivery/http"
 	identitypg "github.com/trandinh0506/hotel-management/backend/internal/modules/identity/persistence/postgres"
@@ -163,6 +166,9 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		WithUploadMaxBytes(cfg.UploadMaxBytes).
 		WithLogger(logger)
 	propertySvc.SetMediaResolver(mediaSvc)
+	bookingSvc := bookingapp.NewService(txRunner, bookingpg.NewRepository(pool), propertySvc, propertySvc, pricingSvc, peopleSvc, rbacSvc, auditSvc, auditSvc, sysClock, idGen)
+	propertySvc.SetAvailabilityReader(bookingSvc)
+	peopleSvc.SetCustomerArchiveChecker(bookingSvc)
 	outboxWorker.Register(mediaapp.EventMediaObjectDeleteRequested, mediaSvc.HandleObjectDeleteRequested)
 
 	workerWG.Add(1)
@@ -187,6 +193,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	})
 	pricingHandler := pricinghttp.NewHandler(pricingSvc, rbacSvc)
 	mediaHandler := mediahttp.NewHandler(mediaSvc, rbacSvc)
+	bookingHandler := bookinghttp.NewHandler(bookingSvc, rbacSvc)
 
 	router := platformhttp.NewRouter(platformhttp.RouterConfig{
 		Logger:             logger,
@@ -201,6 +208,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		propertyHandler.RegisterRoutes(api, authMiddleware)
 		pricingHandler.RegisterRoutes(api, authMiddleware)
 		mediaHandler.RegisterRoutes(api, authMiddleware)
+		bookingHandler.RegisterRoutes(api, authMiddleware)
 	})
 
 	srv := &http.Server{

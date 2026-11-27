@@ -1492,6 +1492,35 @@ paths:
         "200":
           description: Room type media link updated
 
+  /api/v1/availability/quote:
+    post:
+      summary: Check live room availability and compute VAT-exclusive quote without creating a hold
+      operationId: quoteAvailability
+      tags:
+        - Booking
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AvailabilityQuoteRequest"
+      responses:
+        "200":
+          description: Availability and pricing breakdown
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/AvailabilityQuote"
+        "422":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
 components:
   securitySchemes:
     BearerAuth:
@@ -2145,3 +2174,101 @@ components:
         createdAt:
           type: string
           format: date-time
+
+    AvailabilityQuoteRequest:
+      type: object
+      required:
+        - checkIn
+        - checkOut
+        - items
+        - adults
+      properties:
+        checkIn:
+          type: string
+          format: date
+        checkOut:
+          type: string
+          format: date
+        adults:
+          type: integer
+          minimum: 1
+        children:
+          type: integer
+          minimum: 0
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required:
+              - roomTypeId
+              - roomCount
+            properties:
+              roomTypeId:
+                type: string
+                format: uuid
+              roomCount:
+                type: integer
+                minimum: 1
+
+    AvailabilityQuoteItem:
+      type: object
+      properties:
+        roomTypeId:
+          type: string
+          format: uuid
+        roomTypeCode:
+          type: string
+        roomTypeName:
+          type: string
+        capacity:
+          type: integer
+        roomCount:
+          type: integer
+        availableCount:
+          type: integer
+        nightlyRate:
+          type: string
+        nights:
+          type: integer
+        subtotalAmount:
+          type: string
+        vatAmount:
+          type: string
+        totalAmount:
+          type: string
+
+    AvailabilityQuote:
+      type: object
+      properties:
+        checkIn:
+          type: string
+          format: date
+        checkOut:
+          type: string
+          format: date
+        nights:
+          type: integer
+        adults:
+          type: integer
+        children:
+          type: integer
+        available:
+          type: boolean
+        currency:
+          type: string
+        vatRateId:
+          type: string
+          format: uuid
+        vatRate:
+          type: string
+        subtotalAmount:
+          type: string
+        vatAmount:
+          type: string
+        totalAmount:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AvailabilityQuoteItem"
