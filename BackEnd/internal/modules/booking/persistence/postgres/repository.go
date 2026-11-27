@@ -441,6 +441,19 @@ func (r *Repository) UpdateBookingStatusCheckedOut(ctx context.Context, bookingI
 	return mapBookingCore(row.ID, row.ReferenceCode, row.BookingGroupID, row.CustomerID, row.RoomID, row.RoomTypeID, row.CheckIn, row.CheckOut, row.Adults, row.Children, row.Status, row.NightlyRateSnapshot, row.VatRateID, row.VatRateSnapshot, row.SubtotalAmount, row.VatAmount, row.TotalAmount, row.Currency, row.SpecialRequest, row.ExpiresAt, row.CancelledAt, row.CancelReason, row.IdempotencyKey, row.CreatedAt, row.UpdatedAt, row.Version, nil), nil
 }
 
+// UpdateBookingStatusCancelled transitions a pending or confirmed booking to cancelled.
+func (r *Repository) UpdateBookingStatusCancelled(ctx context.Context, bookingID uuid.UUID, reason string, now time.Time) (domain.Booking, error) {
+	row, err := r.queries(ctx).UpdateBookingStatusCancelled(ctx, sqlcgen.UpdateBookingStatusCancelledParams{
+		ID:           bookingID,
+		CancelledAt:  &now,
+		CancelReason: toPgText(reason),
+	})
+	if err != nil {
+		return domain.Booking{}, db.MapPgError(err)
+	}
+	return mapBookingCore(row.ID, row.ReferenceCode, row.BookingGroupID, row.CustomerID, row.RoomID, row.RoomTypeID, row.CheckIn, row.CheckOut, row.Adults, row.Children, row.Status, row.NightlyRateSnapshot, row.VatRateID, row.VatRateSnapshot, row.SubtotalAmount, row.VatAmount, row.TotalAmount, row.Currency, row.SpecialRequest, row.ExpiresAt, row.CancelledAt, row.CancelReason, row.IdempotencyKey, row.CreatedAt, row.UpdatedAt, row.Version, nil), nil
+}
+
 // ListBookings lists bookings with optional filters and cursor pagination.
 func (r *Repository) ListBookings(ctx context.Context, customerID, groupID *uuid.UUID, status, cursor string, limit int) ([]domain.Booking, *string, error) {
 	if limit <= 0 {

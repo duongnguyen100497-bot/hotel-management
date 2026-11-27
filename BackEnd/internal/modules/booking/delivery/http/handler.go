@@ -46,6 +46,9 @@ func (h *Handler) RegisterRoutes(api *gin.RouterGroup, authMiddleware gin.Handle
 	secured.GET("/me/bookings", h.handleListMyBookings)
 	secured.GET("/bookings/:id", h.handleGetBooking)
 	secured.POST("/bookings/:id/confirm", rbacapp.RequirePermission(h.authorizer, "booking.confirm"), h.handleConfirmBooking)
+	// Dispatches both POST /api/v1/bookings/batch/cancel (id == "batch") and POST /api/v1/bookings/:id/cancel
+	// without colliding in Gin's httprouter radix tree.
+	secured.POST("/bookings/:id/cancel", h.handleCancelOrBatchCancel)
 
 	// Group bookings
 	secured.POST("/booking-groups", h.handleCreateBookingGroup)
@@ -411,4 +414,75 @@ func (h *Handler) handleListMyBookingGroups(c *gin.Context) {
 		return
 	}
 	platformhttp.WriteJSON(c, http.StatusOK, res)
+}
+
+type cancelBookingRequest struct {
+	Reason string `json:"reason,omitempty"`
+}
+
+type batchCancelBookingsRequest struct {
+	BookingIDs []uuid.UUID `json:"bookingIds"`
+	Reason     string      `json:"reason,omitempty"`
+}
+
+func (h *Handler) handleCancelOrBatchCancel(c *gin.Context) {
+	if c.Param("id") == "batch" {
+		h.handleBatchCancelBookings(c)
+		return
+	}
+	h.handleCancelBooking(c)
+}
+
+func (h *Handler) handleCancelBooking(c *gin.Context) {
+	principal, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		platformhttp.WriteError(c, apperror.Unauthenticated("authentication required"))
+		return
+	}
+	bookingID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		platformhttp.WriteError(c, apperror.Validation("invalid booking id", apperror.FieldError{
+			Field:   "id",
+			Message: "must be a valid UUID",
+		}))
+		return
+	}
+	var req cancelBookingRequest
+	if c.Request.Body != nil && c.Request.ContentLength != 0 {
+		if err := platformhttp.DecodeJSON(c, &req); err != nil && err != io.EOF {
+			platformhttp.WriteError(c, err)
+			return
+		}
+	}
+	b, err := h.svc.CancelBooking(c.Request.Context(), principal, bookingapp.CancelBookingParams{
+		BookingID: bookingID,
+		Reason:    req.Reason,
+	})
+	if err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	platformhttp.WriteJSON(c, http.StatusOK, gin.H{"data": b})
+}
+
+func (h *Handler) handleBatchCancelBookings(c *gin.Context) {
+	principal, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		platformhttp.WriteError(c, apperror.Unauthenticated("authentication required"))
+		return
+	}
+	var req batchCancelBookingsRequest
+	if err := platformhttp.DecodeJSON(c, &req); err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	cancelled, err := h.svc.BatchCancelBookings(c.Request.Context(), principal, bookingapp.BatchCancelBookingsParams{
+		BookingIDs: req.BookingIDs,
+		Reason:     req.Reason,
+	})
+	if err != nil {
+		platformhttp.WriteError(c, err)
+		return
+	}
+	platformhttp.WriteJSON(c, http.StatusOK, gin.H{"data": cancelled})
 }

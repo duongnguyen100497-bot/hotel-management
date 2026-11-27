@@ -268,6 +268,25 @@ RETURNING
     special_request, expires_at, cancelled_at, cancel_reason,
     idempotency_key, created_at, updated_at, version;
 
+-- name: UpdateBookingStatusCancelled :one
+UPDATE bookings
+SET status = 'cancelled',
+    expires_at = NULL,
+    cancelled_at = $2,
+    cancel_reason = $3,
+    updated_at = $2,
+    version = version + 1
+WHERE id = $1
+  AND status IN ('pending', 'confirmed')
+RETURNING
+    id, reference_code, booking_group_id, customer_id, room_id, room_type_id,
+    lower(stay)::date AS check_in, upper(stay)::date AS check_out,
+    adults, children, status,
+    nightly_rate_snapshot, vat_rate_id, vat_rate_snapshot,
+    subtotal_amount, vat_amount, total_amount, currency,
+    special_request, expires_at, cancelled_at, cancel_reason,
+    idempotency_key, created_at, updated_at, version;
+
 -- name: ListBookingsFiltered :many
 SELECT
     b.id, b.reference_code, b.booking_group_id, b.customer_id, b.room_id, b.room_type_id,

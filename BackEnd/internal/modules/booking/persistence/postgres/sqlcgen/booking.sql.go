@@ -1528,6 +1528,95 @@ func (q *Queries) UpdateBookingGroupStatus(ctx context.Context, arg UpdateBookin
 	return err
 }
 
+const updateBookingStatusCancelled = `-- name: UpdateBookingStatusCancelled :one
+UPDATE bookings
+SET status = 'cancelled',
+    expires_at = NULL,
+    cancelled_at = $2,
+    cancel_reason = $3,
+    updated_at = $2,
+    version = version + 1
+WHERE id = $1
+  AND status IN ('pending', 'confirmed')
+RETURNING
+    id, reference_code, booking_group_id, customer_id, room_id, room_type_id,
+    lower(stay)::date AS check_in, upper(stay)::date AS check_out,
+    adults, children, status,
+    nightly_rate_snapshot, vat_rate_id, vat_rate_snapshot,
+    subtotal_amount, vat_amount, total_amount, currency,
+    special_request, expires_at, cancelled_at, cancel_reason,
+    idempotency_key, created_at, updated_at, version
+`
+
+type UpdateBookingStatusCancelledParams struct {
+	ID           uuid.UUID   `json:"id"`
+	CancelledAt  *time.Time  `json:"cancelled_at"`
+	CancelReason pgtype.Text `json:"cancel_reason"`
+}
+
+type UpdateBookingStatusCancelledRow struct {
+	ID                  uuid.UUID       `json:"id"`
+	ReferenceCode       string          `json:"reference_code"`
+	BookingGroupID      *uuid.UUID      `json:"booking_group_id"`
+	CustomerID          uuid.UUID       `json:"customer_id"`
+	RoomID              uuid.UUID       `json:"room_id"`
+	RoomTypeID          uuid.UUID       `json:"room_type_id"`
+	CheckIn             pgtype.Date     `json:"check_in"`
+	CheckOut            pgtype.Date     `json:"check_out"`
+	Adults              int16           `json:"adults"`
+	Children            int16           `json:"children"`
+	Status              string          `json:"status"`
+	NightlyRateSnapshot decimal.Decimal `json:"nightly_rate_snapshot"`
+	VatRateID           uuid.UUID       `json:"vat_rate_id"`
+	VatRateSnapshot     decimal.Decimal `json:"vat_rate_snapshot"`
+	SubtotalAmount      decimal.Decimal `json:"subtotal_amount"`
+	VatAmount           decimal.Decimal `json:"vat_amount"`
+	TotalAmount         decimal.Decimal `json:"total_amount"`
+	Currency            string          `json:"currency"`
+	SpecialRequest      pgtype.Text     `json:"special_request"`
+	ExpiresAt           *time.Time      `json:"expires_at"`
+	CancelledAt         *time.Time      `json:"cancelled_at"`
+	CancelReason        pgtype.Text     `json:"cancel_reason"`
+	IdempotencyKey      pgtype.Text     `json:"idempotency_key"`
+	CreatedAt           time.Time       `json:"created_at"`
+	UpdatedAt           time.Time       `json:"updated_at"`
+	Version             int32           `json:"version"`
+}
+
+func (q *Queries) UpdateBookingStatusCancelled(ctx context.Context, arg UpdateBookingStatusCancelledParams) (UpdateBookingStatusCancelledRow, error) {
+	row := q.db.QueryRow(ctx, updateBookingStatusCancelled, arg.ID, arg.CancelledAt, arg.CancelReason)
+	var i UpdateBookingStatusCancelledRow
+	err := row.Scan(
+		&i.ID,
+		&i.ReferenceCode,
+		&i.BookingGroupID,
+		&i.CustomerID,
+		&i.RoomID,
+		&i.RoomTypeID,
+		&i.CheckIn,
+		&i.CheckOut,
+		&i.Adults,
+		&i.Children,
+		&i.Status,
+		&i.NightlyRateSnapshot,
+		&i.VatRateID,
+		&i.VatRateSnapshot,
+		&i.SubtotalAmount,
+		&i.VatAmount,
+		&i.TotalAmount,
+		&i.Currency,
+		&i.SpecialRequest,
+		&i.ExpiresAt,
+		&i.CancelledAt,
+		&i.CancelReason,
+		&i.IdempotencyKey,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Version,
+	)
+	return i, err
+}
+
 const updateBookingStatusCheckedIn = `-- name: UpdateBookingStatusCheckedIn :one
 UPDATE bookings
 SET status = 'checked_in',

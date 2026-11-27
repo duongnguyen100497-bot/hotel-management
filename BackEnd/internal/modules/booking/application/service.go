@@ -102,6 +102,7 @@ type Repository interface {
 	UpdateBookingStatusConfirmed(ctx context.Context, bookingID uuid.UUID, now time.Time) (domain.Booking, error)
 	UpdateBookingStatusCheckedIn(ctx context.Context, bookingID uuid.UUID, now time.Time) (domain.Booking, error)
 	UpdateBookingStatusCheckedOut(ctx context.Context, bookingID uuid.UUID, now time.Time) (domain.Booking, error)
+	UpdateBookingStatusCancelled(ctx context.Context, bookingID uuid.UUID, reason string, now time.Time) (domain.Booking, error)
 	ListBookings(ctx context.Context, customerID, groupID *uuid.UUID, status, cursor string, limit int) ([]domain.Booking, *string, error)
 	ListBookingsByGroupID(ctx context.Context, groupID uuid.UUID) ([]domain.Booking, error)
 	InsertBookingGroup(ctx context.Context, g domain.BookingGroup) (domain.BookingGroup, error)

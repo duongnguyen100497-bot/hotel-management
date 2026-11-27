@@ -1706,6 +1706,45 @@ paths:
         "200":
           description: Paginated list of customer booking groups
 
+  /api/v1/bookings/{id}/cancel:
+    post:
+      summary: Cancel a single pending or confirmed booking (does not cancel sibling rooms in group)
+      operationId: cancelBooking
+      tags:
+        - Booking
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Booking cancelled
+        "403":
+          description: Forbidden
+        "409":
+          description: Booking cannot be cancelled in its current status
+
+  /api/v1/bookings/batch/cancel:
+    post:
+      summary: Atomically cancel 1..50 bookings (all-or-nothing under sorted UUID locks)
+      operationId: batchCancelBookings
+      tags:
+        - Booking
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: All requested bookings cancelled atomically
+        "403":
+          description: Forbidden on one or more bookings (entire batch rolled back)
+        "409":
+          description: One or more bookings invalid to cancel (entire batch rolled back)
+
 components:
   securitySchemes:
     BearerAuth:
