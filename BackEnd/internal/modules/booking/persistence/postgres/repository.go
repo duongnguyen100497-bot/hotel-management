@@ -154,6 +154,116 @@ func (r *Repository) UpdateReservationHoldsStatus(ctx context.Context, holdIDs [
 	return db.MapPgError(err)
 }
 
+// ClaimExpiredReservationHolds locks up to limit active holds whose expires_at <= now using SKIP LOCKED.
+func (r *Repository) ClaimExpiredReservationHolds(ctx context.Context, now time.Time, limit int) ([]domain.ReservationHold, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := r.queries(ctx).ClaimExpiredReservationHolds(ctx, sqlcgen.ClaimExpiredReservationHoldsParams{
+		ExpiresAt: now,
+		Limit:     int32(limit),
+	})
+	if err != nil {
+		return nil, db.MapPgError(err)
+	}
+	out := make([]domain.ReservationHold, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, mapHoldRow(row.ID, row.CustomerID, row.BookingGroupID, row.RoomID, row.RoomTypeID, row.CheckIn, row.CheckOut, row.HoldMode, row.HoldToken, row.RedisKey, row.TtlSeconds, row.Status, row.ExpiresAt, row.ReleasedReason, row.CreatedAt, row.UpdatedAt))
+	}
+	return out, nil
+}
+
+// ListActiveNonExpiredHolds returns all active holds whose expires_at > now ordered by created_at ASC, id ASC.
+func (r *Repository) ListActiveNonExpiredHolds(ctx context.Context, now time.Time) ([]domain.ReservationHold, error) {
+	rows, err := r.queries(ctx).ListActiveNonExpiredHolds(ctx, now)
+	if err != nil {
+		return nil, db.MapPgError(err)
+	}
+	out := make([]domain.ReservationHold, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, mapHoldRow(row.ID, row.CustomerID, row.BookingGroupID, row.RoomID, row.RoomTypeID, row.CheckIn, row.CheckOut, row.HoldMode, row.HoldToken, row.RedisKey, row.TtlSeconds, row.Status, row.ExpiresAt, row.ReleasedReason, row.CreatedAt, row.UpdatedAt))
+	}
+	return out, nil
+}
+
+// ClaimExpiredPendingBookings locks up to limit pending bookings whose expires_at <= now using SKIP LOCKED.
+func (r *Repository) ClaimExpiredPendingBookings(ctx context.Context, now time.Time, limit int) ([]domain.ExpiredBookingSummary, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := r.queries(ctx).ClaimExpiredPendingBookings(ctx, sqlcgen.ClaimExpiredPendingBookingsParams{
+		ExpiresAt: &now,
+		Limit:     int32(limit),
+	})
+	if err != nil {
+		return nil, db.MapPgError(err)
+	}
+	out := make([]domain.ExpiredBookingSummary, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, domain.ExpiredBookingSummary{
+			ID:             row.ID,
+			ReferenceCode:  row.ReferenceCode,
+			BookingGroupID: row.BookingGroupID,
+			CustomerID:     row.CustomerID,
+			RoomID:         row.RoomID,
+			RoomTypeID:     row.RoomTypeID,
+			CheckIn:        fromPgDate(row.CheckIn),
+			CheckOut:       fromPgDate(row.CheckOut),
+		})
+	}
+	return out, nil
+}
+
+// MarkBookingExpired transitions a pending booking to expired.
+func (r *Repository) MarkBookingExpired(ctx context.Context, bookingID uuid.UUID, now time.Time) error {
+	return db.MapPgError(r.queries(ctx).MarkBookingExpired(ctx, sqlcgen.MarkBookingExpiredParams{
+		ID:        bookingID,
+		UpdatedAt: now,
+	}))
+}
+
+// InsertBookingStatusHistory appends an immutable booking status transition entry.
+func (r *Repository) InsertBookingStatusHistory(ctx context.Context, entry domain.BookingStatusHistoryEntry) error {
+	var fromStr string
+	if entry.FromStatus != nil {
+		fromStr = string(*entry.FromStatus)
+	}
+	return db.MapPgError(r.queries(ctx).InsertBookingStatusHistory(ctx, sqlcgen.InsertBookingStatusHistoryParams{
+		ID:            entry.ID,
+		BookingID:     entry.BookingID,
+		FromStatus:    toPgText(fromStr),
+		ToStatus:      string(entry.ToStatus),
+		ActorUserID:   entry.ActorUserID,
+		Reason:        toPgText(entry.Reason),
+		CorrelationID: entry.CorrelationID,
+		OccurredAt:    entry.OccurredAt,
+	}))
+}
+
+// RecomputeBookingGroupStatus locks the booking group, reads all child booking statuses, and updates its aggregate status.
+func (r *Repository) RecomputeBookingGroupStatus(ctx context.Context, groupID uuid.UUID, now time.Time) (domain.GroupStatus, error) {
+	if _, err := r.queries(ctx).LockBookingGroupForUpdate(ctx, groupID); err != nil {
+		return "", db.MapPgError(err)
+	}
+	rawStatuses, err := r.queries(ctx).ListChildBookingStatusesByGroup(ctx, &groupID)
+	if err != nil {
+		return "", db.MapPgError(err)
+	}
+	statuses := make([]domain.BookingStatus, 0, len(rawStatuses))
+	for _, st := range rawStatuses {
+		statuses = append(statuses, domain.BookingStatus(st))
+	}
+	derived := domain.ComputeGroupStatus(statuses)
+	if err := r.queries(ctx).UpdateBookingGroupStatus(ctx, sqlcgen.UpdateBookingGroupStatusParams{
+		ID:        groupID,
+		Status:    string(derived),
+		UpdatedAt: now,
+	}); err != nil {
+		return "", db.MapPgError(err)
+	}
+	return derived, nil
+}
+
 func mapHoldRow(
 	id, customerID uuid.UUID,
 	groupID *uuid.UUID,

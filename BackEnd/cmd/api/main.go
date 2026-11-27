@@ -184,6 +184,18 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		mediaSvc.RunCleanupWorker(workerCtx, 15*time.Minute)
 	}()
 
+	workerWG.Add(1)
+	go func() {
+		defer workerWG.Done()
+		bookingSvc.RunExpiryScanner(workerCtx, 10*time.Second)
+	}()
+
+	workerWG.Add(1)
+	go func() {
+		defer workerWG.Done()
+		bookingSvc.RunReconciler(workerCtx, 90*time.Second)
+	}()
+
 	authMiddleware := auth.AuthenticatorMiddleware(tokenManager, identitySvc)
 	identityHandler := identityhttp.NewHandler(identityhttp.HandlerConfig{
 		Service:      identitySvc,

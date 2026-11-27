@@ -42,6 +42,13 @@ type HoldStore interface {
 	ScanHoldKeys(ctx context.Context) (map[string]string, error)
 }
 
+// BookingLifecycleHook is an optional port wired in Phase 4 (wallet) to react to
+// booking expiration or cancellation inside the same PostgreSQL transaction.
+type BookingLifecycleHook interface {
+	OnBookingExpired(ctx context.Context, bookingID uuid.UUID, bookingGroupID *uuid.UUID) error
+	OnBookingCancelled(ctx context.Context, bookingID uuid.UUID, bookingGroupID *uuid.UUID, customerID uuid.UUID, isFreeCancelEligible bool) error
+}
+
 // Repository defines the PostgreSQL persistence contract for the booking module.
 type Repository interface {
 	ListUnavailableRoomIDs(ctx context.Context, roomIDs []uuid.UUID, checkIn, checkOut time.Time, now time.Time) (map[uuid.UUID]struct{}, error)
@@ -51,6 +58,12 @@ type Repository interface {
 	GetReservationHoldByIDForUpdate(ctx context.Context, id uuid.UUID) (domain.ReservationHold, error)
 	ListReservationHoldsByGroupIDForUpdate(ctx context.Context, groupID uuid.UUID) ([]domain.ReservationHold, error)
 	UpdateReservationHoldsStatus(ctx context.Context, holdIDs []uuid.UUID, status domain.HoldStatus, reason string, now time.Time) error
+	ClaimExpiredReservationHolds(ctx context.Context, now time.Time, limit int) ([]domain.ReservationHold, error)
+	ListActiveNonExpiredHolds(ctx context.Context, now time.Time) ([]domain.ReservationHold, error)
+	ClaimExpiredPendingBookings(ctx context.Context, now time.Time, limit int) ([]domain.ExpiredBookingSummary, error)
+	MarkBookingExpired(ctx context.Context, bookingID uuid.UUID, now time.Time) error
+	InsertBookingStatusHistory(ctx context.Context, entry domain.BookingStatusHistoryEntry) error
+	RecomputeBookingGroupStatus(ctx context.Context, groupID uuid.UUID, now time.Time) (domain.GroupStatus, error)
 }
 
 // QuoteAvailabilityParams defines inputs for POST /api/v1/availability/quote.
@@ -64,19 +77,20 @@ type QuoteAvailabilityParams struct {
 
 // Service implements booking availability, holds, individual/group booking, and cancellation workflows.
 type Service struct {
-	txRunner  db.TxRunner
-	repo      Repository
-	holdStore HoldStore
-	settings  propertyapp.SettingsReader
-	catalog   propertyapp.RoomCatalogReader
-	pricing   pricingapp.QuoteCalculator
-	customers peopleapp.CustomerReader
-	authz     rbacapp.Authorizer
-	audit     auditapp.Recorder
-	outbox    auditapp.OutboxEnqueuer
-	clk       clock.Clock
-	ids       id.Generator
-	logger    *slog.Logger
+	txRunner      db.TxRunner
+	repo          Repository
+	holdStore     HoldStore
+	settings      propertyapp.SettingsReader
+	catalog       propertyapp.RoomCatalogReader
+	pricing       pricingapp.QuoteCalculator
+	customers     peopleapp.CustomerReader
+	authz         rbacapp.Authorizer
+	audit         auditapp.Recorder
+	outbox        auditapp.OutboxEnqueuer
+	lifecycleHook BookingLifecycleHook
+	clk           clock.Clock
+	ids           id.Generator
+	logger        *slog.Logger
 }
 
 // Compile-time interface assertions.
@@ -133,6 +147,11 @@ func (s *Service) WithLogger(logger *slog.Logger) *Service {
 		s.logger = logger
 	}
 	return s
+}
+
+// SetLifecycleHook wires the optional Phase 4 wallet hook for booking expiry and cancellation.
+func (s *Service) SetLifecycleHook(hook BookingLifecycleHook) {
+	s.lifecycleHook = hook
 }
 
 // EnsureCustomerCanBeArchived blocks archiving a customer who has active bookings.

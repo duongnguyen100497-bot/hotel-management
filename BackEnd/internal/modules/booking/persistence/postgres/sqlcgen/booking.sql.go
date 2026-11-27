@@ -13,6 +13,144 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const claimExpiredPendingBookings = `-- name: ClaimExpiredPendingBookings :many
+SELECT
+    id, reference_code, booking_group_id, customer_id, room_id, room_type_id,
+    lower(stay)::date AS check_in, upper(stay)::date AS check_out,
+    status, expires_at
+FROM bookings
+WHERE status = 'pending'
+  AND expires_at IS NOT NULL
+  AND expires_at <= $1
+ORDER BY id ASC
+LIMIT $2
+FOR UPDATE SKIP LOCKED
+`
+
+type ClaimExpiredPendingBookingsParams struct {
+	ExpiresAt *time.Time `json:"expires_at"`
+	Limit     int32      `json:"limit"`
+}
+
+type ClaimExpiredPendingBookingsRow struct {
+	ID             uuid.UUID   `json:"id"`
+	ReferenceCode  string      `json:"reference_code"`
+	BookingGroupID *uuid.UUID  `json:"booking_group_id"`
+	CustomerID     uuid.UUID   `json:"customer_id"`
+	RoomID         uuid.UUID   `json:"room_id"`
+	RoomTypeID     uuid.UUID   `json:"room_type_id"`
+	CheckIn        pgtype.Date `json:"check_in"`
+	CheckOut       pgtype.Date `json:"check_out"`
+	Status         string      `json:"status"`
+	ExpiresAt      *time.Time  `json:"expires_at"`
+}
+
+func (q *Queries) ClaimExpiredPendingBookings(ctx context.Context, arg ClaimExpiredPendingBookingsParams) ([]ClaimExpiredPendingBookingsRow, error) {
+	rows, err := q.db.Query(ctx, claimExpiredPendingBookings, arg.ExpiresAt, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ClaimExpiredPendingBookingsRow{}
+	for rows.Next() {
+		var i ClaimExpiredPendingBookingsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ReferenceCode,
+			&i.BookingGroupID,
+			&i.CustomerID,
+			&i.RoomID,
+			&i.RoomTypeID,
+			&i.CheckIn,
+			&i.CheckOut,
+			&i.Status,
+			&i.ExpiresAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const claimExpiredReservationHolds = `-- name: ClaimExpiredReservationHolds :many
+SELECT
+    id, customer_id, booking_group_id, room_id, room_type_id,
+    lower(stay)::date AS check_in, upper(stay)::date AS check_out,
+    hold_mode, hold_token, redis_key, ttl_seconds,
+    status, expires_at, released_reason, created_at, updated_at
+FROM reservation_holds
+WHERE status = 'active'
+  AND expires_at <= $1
+ORDER BY id ASC
+LIMIT $2
+FOR UPDATE SKIP LOCKED
+`
+
+type ClaimExpiredReservationHoldsParams struct {
+	ExpiresAt time.Time `json:"expires_at"`
+	Limit     int32     `json:"limit"`
+}
+
+type ClaimExpiredReservationHoldsRow struct {
+	ID             uuid.UUID   `json:"id"`
+	CustomerID     uuid.UUID   `json:"customer_id"`
+	BookingGroupID *uuid.UUID  `json:"booking_group_id"`
+	RoomID         uuid.UUID   `json:"room_id"`
+	RoomTypeID     uuid.UUID   `json:"room_type_id"`
+	CheckIn        pgtype.Date `json:"check_in"`
+	CheckOut       pgtype.Date `json:"check_out"`
+	HoldMode       string      `json:"hold_mode"`
+	HoldToken      string      `json:"hold_token"`
+	RedisKey       string      `json:"redis_key"`
+	TtlSeconds     int32       `json:"ttl_seconds"`
+	Status         string      `json:"status"`
+	ExpiresAt      time.Time   `json:"expires_at"`
+	ReleasedReason pgtype.Text `json:"released_reason"`
+	CreatedAt      time.Time   `json:"created_at"`
+	UpdatedAt      time.Time   `json:"updated_at"`
+}
+
+func (q *Queries) ClaimExpiredReservationHolds(ctx context.Context, arg ClaimExpiredReservationHoldsParams) ([]ClaimExpiredReservationHoldsRow, error) {
+	rows, err := q.db.Query(ctx, claimExpiredReservationHolds, arg.ExpiresAt, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ClaimExpiredReservationHoldsRow{}
+	for rows.Next() {
+		var i ClaimExpiredReservationHoldsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.CustomerID,
+			&i.BookingGroupID,
+			&i.RoomID,
+			&i.RoomTypeID,
+			&i.CheckIn,
+			&i.CheckOut,
+			&i.HoldMode,
+			&i.HoldToken,
+			&i.RedisKey,
+			&i.TtlSeconds,
+			&i.Status,
+			&i.ExpiresAt,
+			&i.ReleasedReason,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getReservationHoldByIDForUpdate = `-- name: GetReservationHoldByIDForUpdate :one
 SELECT
     id, customer_id, booking_group_id, room_id, room_type_id,
@@ -81,6 +219,39 @@ func (q *Queries) HasActiveBookingForCustomer(ctx context.Context, customerID uu
 	var has_active bool
 	err := row.Scan(&has_active)
 	return has_active, err
+}
+
+const insertBookingStatusHistory = `-- name: InsertBookingStatusHistory :exec
+INSERT INTO booking_status_history (
+    id, booking_id, from_status, to_status, actor_user_id, reason, correlation_id, occurred_at
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8
+)
+`
+
+type InsertBookingStatusHistoryParams struct {
+	ID            uuid.UUID   `json:"id"`
+	BookingID     uuid.UUID   `json:"booking_id"`
+	FromStatus    pgtype.Text `json:"from_status"`
+	ToStatus      string      `json:"to_status"`
+	ActorUserID   *uuid.UUID  `json:"actor_user_id"`
+	Reason        pgtype.Text `json:"reason"`
+	CorrelationID *uuid.UUID  `json:"correlation_id"`
+	OccurredAt    time.Time   `json:"occurred_at"`
+}
+
+func (q *Queries) InsertBookingStatusHistory(ctx context.Context, arg InsertBookingStatusHistoryParams) error {
+	_, err := q.db.Exec(ctx, insertBookingStatusHistory,
+		arg.ID,
+		arg.BookingID,
+		arg.FromStatus,
+		arg.ToStatus,
+		arg.ActorUserID,
+		arg.Reason,
+		arg.CorrelationID,
+		arg.OccurredAt,
+	)
+	return err
 }
 
 const insertReservationHold = `-- name: InsertReservationHold :one
@@ -173,6 +344,101 @@ func (q *Queries) InsertReservationHold(ctx context.Context, arg InsertReservati
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const listActiveNonExpiredHolds = `-- name: ListActiveNonExpiredHolds :many
+SELECT
+    id, customer_id, booking_group_id, room_id, room_type_id,
+    lower(stay)::date AS check_in, upper(stay)::date AS check_out,
+    hold_mode, hold_token, redis_key, ttl_seconds,
+    status, expires_at, released_reason, created_at, updated_at
+FROM reservation_holds
+WHERE status = 'active'
+  AND expires_at > $1
+ORDER BY created_at ASC, id ASC
+`
+
+type ListActiveNonExpiredHoldsRow struct {
+	ID             uuid.UUID   `json:"id"`
+	CustomerID     uuid.UUID   `json:"customer_id"`
+	BookingGroupID *uuid.UUID  `json:"booking_group_id"`
+	RoomID         uuid.UUID   `json:"room_id"`
+	RoomTypeID     uuid.UUID   `json:"room_type_id"`
+	CheckIn        pgtype.Date `json:"check_in"`
+	CheckOut       pgtype.Date `json:"check_out"`
+	HoldMode       string      `json:"hold_mode"`
+	HoldToken      string      `json:"hold_token"`
+	RedisKey       string      `json:"redis_key"`
+	TtlSeconds     int32       `json:"ttl_seconds"`
+	Status         string      `json:"status"`
+	ExpiresAt      time.Time   `json:"expires_at"`
+	ReleasedReason pgtype.Text `json:"released_reason"`
+	CreatedAt      time.Time   `json:"created_at"`
+	UpdatedAt      time.Time   `json:"updated_at"`
+}
+
+func (q *Queries) ListActiveNonExpiredHolds(ctx context.Context, expiresAt time.Time) ([]ListActiveNonExpiredHoldsRow, error) {
+	rows, err := q.db.Query(ctx, listActiveNonExpiredHolds, expiresAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListActiveNonExpiredHoldsRow{}
+	for rows.Next() {
+		var i ListActiveNonExpiredHoldsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.CustomerID,
+			&i.BookingGroupID,
+			&i.RoomID,
+			&i.RoomTypeID,
+			&i.CheckIn,
+			&i.CheckOut,
+			&i.HoldMode,
+			&i.HoldToken,
+			&i.RedisKey,
+			&i.TtlSeconds,
+			&i.Status,
+			&i.ExpiresAt,
+			&i.ReleasedReason,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listChildBookingStatusesByGroup = `-- name: ListChildBookingStatusesByGroup :many
+SELECT status
+FROM bookings
+WHERE booking_group_id = $1
+ORDER BY id ASC
+`
+
+func (q *Queries) ListChildBookingStatusesByGroup(ctx context.Context, bookingGroupID *uuid.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, listChildBookingStatusesByGroup, bookingGroupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var status string
+		if err := rows.Scan(&status); err != nil {
+			return nil, err
+		}
+		items = append(items, status)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listReservationHoldsByGroupIDForUpdate = `-- name: ListReservationHoldsByGroupIDForUpdate :many
@@ -293,6 +559,45 @@ func (q *Queries) ListUnavailableRoomIDsForStay(ctx context.Context, arg ListUna
 	return items, nil
 }
 
+const lockBookingGroupForUpdate = `-- name: LockBookingGroupForUpdate :one
+SELECT id, status, version
+FROM booking_groups
+WHERE id = $1
+FOR UPDATE
+`
+
+type LockBookingGroupForUpdateRow struct {
+	ID      uuid.UUID `json:"id"`
+	Status  string    `json:"status"`
+	Version int32     `json:"version"`
+}
+
+func (q *Queries) LockBookingGroupForUpdate(ctx context.Context, id uuid.UUID) (LockBookingGroupForUpdateRow, error) {
+	row := q.db.QueryRow(ctx, lockBookingGroupForUpdate, id)
+	var i LockBookingGroupForUpdateRow
+	err := row.Scan(&i.ID, &i.Status, &i.Version)
+	return i, err
+}
+
+const markBookingExpired = `-- name: MarkBookingExpired :exec
+UPDATE bookings
+SET status = 'expired',
+    updated_at = $2,
+    version = version + 1
+WHERE id = $1
+  AND status = 'pending'
+`
+
+type MarkBookingExpiredParams struct {
+	ID        uuid.UUID `json:"id"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (q *Queries) MarkBookingExpired(ctx context.Context, arg MarkBookingExpiredParams) error {
+	_, err := q.db.Exec(ctx, markBookingExpired, arg.ID, arg.UpdatedAt)
+	return err
+}
+
 const tryAdvisoryXactLockRoom = `-- name: TryAdvisoryXactLockRoom :one
 SELECT pg_try_advisory_xact_lock(hashtextextended($1::text, 0)) AS locked
 `
@@ -302,6 +607,25 @@ func (q *Queries) TryAdvisoryXactLockRoom(ctx context.Context, dollar_1 string) 
 	var locked bool
 	err := row.Scan(&locked)
 	return locked, err
+}
+
+const updateBookingGroupStatus = `-- name: UpdateBookingGroupStatus :exec
+UPDATE booking_groups
+SET status = $2,
+    updated_at = $3,
+    version = version + 1
+WHERE id = $1
+`
+
+type UpdateBookingGroupStatusParams struct {
+	ID        uuid.UUID `json:"id"`
+	Status    string    `json:"status"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (q *Queries) UpdateBookingGroupStatus(ctx context.Context, arg UpdateBookingGroupStatusParams) error {
+	_, err := q.db.Exec(ctx, updateBookingGroupStatus, arg.ID, arg.Status, arg.UpdatedAt)
+	return err
 }
 
 const updateReservationHoldsStatus = `-- name: UpdateReservationHoldsStatus :exec

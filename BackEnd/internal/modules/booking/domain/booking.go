@@ -250,3 +250,77 @@ func GenerateHoldToken() (string, error) {
 	}
 	return hex.EncodeToString(buf), nil
 }
+
+// ComputeGroupStatus derives the aggregate booking_groups.status from all child booking statuses.
+func ComputeGroupStatus(childStatuses []BookingStatus) GroupStatus {
+	if len(childStatuses) == 0 {
+		return GroupStatusHolding
+	}
+
+	var (
+		nPending    int
+		nConfirmed  int
+		nCheckedIn  int
+		nCheckedOut int
+		nCancelled  int
+		nExpired    int
+	)
+	for _, st := range childStatuses {
+		switch st {
+		case BookingStatusPending:
+			nPending++
+		case BookingStatusConfirmed:
+			nConfirmed++
+		case BookingStatusCheckedIn:
+			nCheckedIn++
+		case BookingStatusCheckedOut:
+			nCheckedOut++
+		case BookingStatusCancelled:
+			nCancelled++
+		case BookingStatusExpired:
+			nExpired++
+		}
+	}
+
+	total := len(childStatuses)
+	switch {
+	case nExpired == total:
+		return GroupStatusExpired
+	case nCancelled == total:
+		return GroupStatusCancelled
+	case nCheckedOut == total:
+		return GroupStatusCompleted
+	case nCancelled > 0:
+		return GroupStatusPartiallyCancelled
+	case nConfirmed+nCheckedIn+nCheckedOut == total:
+		return GroupStatusConfirmed
+	case (nConfirmed+nCheckedIn+nCheckedOut) > 0 && (nPending > 0 || nExpired > 0):
+		return GroupStatusPartiallyConfirmed
+	default:
+		return GroupStatusPending
+	}
+}
+
+// ExpiredBookingSummary carries minimal info for an expired pending booking.
+type ExpiredBookingSummary struct {
+	ID             uuid.UUID
+	ReferenceCode  string
+	BookingGroupID *uuid.UUID
+	CustomerID     uuid.UUID
+	RoomID         uuid.UUID
+	RoomTypeID     uuid.UUID
+	CheckIn        time.Time
+	CheckOut       time.Time
+}
+
+// BookingStatusHistoryEntry represents an immutable status transition record.
+type BookingStatusHistoryEntry struct {
+	ID            uuid.UUID
+	BookingID     uuid.UUID
+	FromStatus    *BookingStatus
+	ToStatus      BookingStatus
+	ActorUserID   *uuid.UUID
+	Reason        string
+	CorrelationID *uuid.UUID
+	OccurredAt    time.Time
+}
