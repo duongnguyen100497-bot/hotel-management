@@ -1,6 +1,8 @@
 package domain
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -181,4 +183,70 @@ type AvailabilityQuote struct {
 	VatAmount      decimal.Decimal         `json:"vatAmount"`
 	TotalAmount    decimal.Decimal         `json:"totalAmount"`
 	Items          []AvailabilityQuoteItem `json:"items"`
+}
+
+// ReservationHold represents an authoritative PostgreSQL hold record paired with a Redis hold key.
+type ReservationHold struct {
+	ID             uuid.UUID  `json:"id"`
+	CustomerID     uuid.UUID  `json:"customerId"`
+	BookingGroupID *uuid.UUID `json:"bookingGroupId,omitempty"`
+	RoomID         uuid.UUID  `json:"roomId"`
+	RoomTypeID     uuid.UUID  `json:"roomTypeId"`
+	CheckIn        time.Time  `json:"-"`
+	CheckOut       time.Time  `json:"-"`
+	HoldMode       HoldMode   `json:"holdMode"`
+	HoldToken      string     `json:"-"`
+	RedisKey       string     `json:"redisKey"`
+	TTLSeconds     int        `json:"ttlSeconds"`
+	Status         HoldStatus `json:"status"`
+	ExpiresAt      time.Time  `json:"expiresAt"`
+	ReleasedReason string     `json:"releasedReason,omitempty"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
+}
+
+// HoldRoomSummary describes a single room locked inside a hold response.
+type HoldRoomSummary struct {
+	ID           uuid.UUID `json:"id"`
+	RoomID       uuid.UUID `json:"roomId"`
+	RoomCode     string    `json:"roomCode"`
+	RoomTypeID   uuid.UUID `json:"roomTypeId"`
+	RoomTypeCode string    `json:"roomTypeCode"`
+	RedisKey     string    `json:"redisKey"`
+}
+
+// HoldResult is the response payload of POST /api/v1/holds.
+type HoldResult struct {
+	HoldID      uuid.UUID         `json:"holdId"`
+	GroupHoldID *uuid.UUID        `json:"groupHoldId,omitempty"`
+	HoldMode    HoldMode          `json:"holdMode"`
+	HoldToken   string            `json:"holdToken"`
+	TTLSeconds  int               `json:"ttlSeconds"`
+	ExpiresAt   time.Time         `json:"expiresAt"`
+	CheckIn     string            `json:"checkIn"`
+	CheckOut    string            `json:"checkOut"`
+	Nights      int               `json:"nights"`
+	Holds       []HoldRoomSummary `json:"holds"`
+	Quote       AvailabilityQuote `json:"quote"`
+}
+
+// RoomHoldRedisKey returns the zero-PII Redis key for a room hold:
+// hold:room:{roomId}:{YYYY-MM-DD}:{YYYY-MM-DD}
+func RoomHoldRedisKey(roomID uuid.UUID, checkIn, checkOut time.Time) string {
+	return fmt.Sprintf("hold:room:%s:%s:%s", roomID.String(), checkIn.Format(DateLayout), checkOut.Format(DateLayout))
+}
+
+// GroupHoldRedisKey returns the zero-PII Redis key for a group hold:
+// hold:group:{groupId}
+func GroupHoldRedisKey(groupID uuid.UUID) string {
+	return fmt.Sprintf("hold:group:%s", groupID.String())
+}
+
+// GenerateHoldToken produces a cryptographically random 64-char hex hold token (32 bytes).
+func GenerateHoldToken() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate hold token: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
 }

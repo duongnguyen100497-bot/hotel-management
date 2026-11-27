@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,12 +30,27 @@ type (
 	QuoteItemRequest      = domain.QuoteItemRequest
 	AvailabilityQuoteItem = domain.AvailabilityQuoteItem
 	AvailabilityQuote     = domain.AvailabilityQuote
+	ReservationHold       = domain.ReservationHold
+	HoldRoomSummary       = domain.HoldRoomSummary
+	HoldResult            = domain.HoldResult
 )
+
+// HoldStore defines the Redis Lua persistence contract for atomic room/group holds.
+type HoldStore interface {
+	AcquireHoldKeys(ctx context.Context, keys []string, token string, ttlSeconds int) (bool, error)
+	ReleaseHoldKeys(ctx context.Context, keys []string, token string) (int64, error)
+	ScanHoldKeys(ctx context.Context) (map[string]string, error)
+}
 
 // Repository defines the PostgreSQL persistence contract for the booking module.
 type Repository interface {
 	ListUnavailableRoomIDs(ctx context.Context, roomIDs []uuid.UUID, checkIn, checkOut time.Time, now time.Time) (map[uuid.UUID]struct{}, error)
 	HasActiveBookingForCustomer(ctx context.Context, customerID uuid.UUID) (bool, error)
+	TryAdvisoryXactLockRoom(ctx context.Context, roomID uuid.UUID) (bool, error)
+	InsertReservationHold(ctx context.Context, h domain.ReservationHold) (domain.ReservationHold, error)
+	GetReservationHoldByIDForUpdate(ctx context.Context, id uuid.UUID) (domain.ReservationHold, error)
+	ListReservationHoldsByGroupIDForUpdate(ctx context.Context, groupID uuid.UUID) ([]domain.ReservationHold, error)
+	UpdateReservationHoldsStatus(ctx context.Context, holdIDs []uuid.UUID, status domain.HoldStatus, reason string, now time.Time) error
 }
 
 // QuoteAvailabilityParams defines inputs for POST /api/v1/availability/quote.
@@ -50,6 +66,7 @@ type QuoteAvailabilityParams struct {
 type Service struct {
 	txRunner  db.TxRunner
 	repo      Repository
+	holdStore HoldStore
 	settings  propertyapp.SettingsReader
 	catalog   propertyapp.RoomCatalogReader
 	pricing   pricingapp.QuoteCalculator
@@ -59,6 +76,7 @@ type Service struct {
 	outbox    auditapp.OutboxEnqueuer
 	clk       clock.Clock
 	ids       id.Generator
+	logger    *slog.Logger
 }
 
 // Compile-time interface assertions.
@@ -99,7 +117,22 @@ func NewService(
 		outbox:    outbox,
 		clk:       clk,
 		ids:       ids,
+		logger:    slog.Default(),
 	}
+}
+
+// WithHoldStore attaches the Redis Lua hold store.
+func (s *Service) WithHoldStore(store HoldStore) *Service {
+	s.holdStore = store
+	return s
+}
+
+// WithLogger attaches a structured logger.
+func (s *Service) WithLogger(logger *slog.Logger) *Service {
+	if logger != nil {
+		s.logger = logger
+	}
+	return s
 }
 
 // EnsureCustomerCanBeArchived blocks archiving a customer who has active bookings.

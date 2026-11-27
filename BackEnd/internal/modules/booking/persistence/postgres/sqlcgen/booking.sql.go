@@ -13,6 +13,60 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const getReservationHoldByIDForUpdate = `-- name: GetReservationHoldByIDForUpdate :one
+SELECT
+    id, customer_id, booking_group_id, room_id, room_type_id,
+    lower(stay)::date AS check_in, upper(stay)::date AS check_out,
+    hold_mode, hold_token, redis_key, ttl_seconds,
+    status, expires_at, released_reason, created_at, updated_at
+FROM reservation_holds
+WHERE id = $1
+FOR UPDATE
+`
+
+type GetReservationHoldByIDForUpdateRow struct {
+	ID             uuid.UUID   `json:"id"`
+	CustomerID     uuid.UUID   `json:"customer_id"`
+	BookingGroupID *uuid.UUID  `json:"booking_group_id"`
+	RoomID         uuid.UUID   `json:"room_id"`
+	RoomTypeID     uuid.UUID   `json:"room_type_id"`
+	CheckIn        pgtype.Date `json:"check_in"`
+	CheckOut       pgtype.Date `json:"check_out"`
+	HoldMode       string      `json:"hold_mode"`
+	HoldToken      string      `json:"hold_token"`
+	RedisKey       string      `json:"redis_key"`
+	TtlSeconds     int32       `json:"ttl_seconds"`
+	Status         string      `json:"status"`
+	ExpiresAt      time.Time   `json:"expires_at"`
+	ReleasedReason pgtype.Text `json:"released_reason"`
+	CreatedAt      time.Time   `json:"created_at"`
+	UpdatedAt      time.Time   `json:"updated_at"`
+}
+
+func (q *Queries) GetReservationHoldByIDForUpdate(ctx context.Context, id uuid.UUID) (GetReservationHoldByIDForUpdateRow, error) {
+	row := q.db.QueryRow(ctx, getReservationHoldByIDForUpdate, id)
+	var i GetReservationHoldByIDForUpdateRow
+	err := row.Scan(
+		&i.ID,
+		&i.CustomerID,
+		&i.BookingGroupID,
+		&i.RoomID,
+		&i.RoomTypeID,
+		&i.CheckIn,
+		&i.CheckOut,
+		&i.HoldMode,
+		&i.HoldToken,
+		&i.RedisKey,
+		&i.TtlSeconds,
+		&i.Status,
+		&i.ExpiresAt,
+		&i.ReleasedReason,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const hasActiveBookingForCustomer = `-- name: HasActiveBookingForCustomer :one
 SELECT EXISTS (
     SELECT 1
@@ -27,6 +81,166 @@ func (q *Queries) HasActiveBookingForCustomer(ctx context.Context, customerID uu
 	var has_active bool
 	err := row.Scan(&has_active)
 	return has_active, err
+}
+
+const insertReservationHold = `-- name: InsertReservationHold :one
+INSERT INTO reservation_holds (
+    id, customer_id, booking_group_id, room_id, room_type_id,
+    stay, hold_mode, hold_token, redis_key, ttl_seconds,
+    status, expires_at, created_at, updated_at
+) VALUES (
+    $1, $2, $3, $4, $5,
+    daterange($6::date, $7::date, '[)'), $8, $9, $10, $11,
+    $12, $13, $14, $14
+)
+RETURNING
+    id, customer_id, booking_group_id, room_id, room_type_id,
+    lower(stay)::date AS check_in, upper(stay)::date AS check_out,
+    hold_mode, hold_token, redis_key, ttl_seconds,
+    status, expires_at, released_reason, created_at, updated_at
+`
+
+type InsertReservationHoldParams struct {
+	ID             uuid.UUID   `json:"id"`
+	CustomerID     uuid.UUID   `json:"customer_id"`
+	BookingGroupID *uuid.UUID  `json:"booking_group_id"`
+	RoomID         uuid.UUID   `json:"room_id"`
+	RoomTypeID     uuid.UUID   `json:"room_type_id"`
+	Column6        pgtype.Date `json:"column_6"`
+	Column7        pgtype.Date `json:"column_7"`
+	HoldMode       string      `json:"hold_mode"`
+	HoldToken      string      `json:"hold_token"`
+	RedisKey       string      `json:"redis_key"`
+	TtlSeconds     int32       `json:"ttl_seconds"`
+	Status         string      `json:"status"`
+	ExpiresAt      time.Time   `json:"expires_at"`
+	CreatedAt      time.Time   `json:"created_at"`
+}
+
+type InsertReservationHoldRow struct {
+	ID             uuid.UUID   `json:"id"`
+	CustomerID     uuid.UUID   `json:"customer_id"`
+	BookingGroupID *uuid.UUID  `json:"booking_group_id"`
+	RoomID         uuid.UUID   `json:"room_id"`
+	RoomTypeID     uuid.UUID   `json:"room_type_id"`
+	CheckIn        pgtype.Date `json:"check_in"`
+	CheckOut       pgtype.Date `json:"check_out"`
+	HoldMode       string      `json:"hold_mode"`
+	HoldToken      string      `json:"hold_token"`
+	RedisKey       string      `json:"redis_key"`
+	TtlSeconds     int32       `json:"ttl_seconds"`
+	Status         string      `json:"status"`
+	ExpiresAt      time.Time   `json:"expires_at"`
+	ReleasedReason pgtype.Text `json:"released_reason"`
+	CreatedAt      time.Time   `json:"created_at"`
+	UpdatedAt      time.Time   `json:"updated_at"`
+}
+
+func (q *Queries) InsertReservationHold(ctx context.Context, arg InsertReservationHoldParams) (InsertReservationHoldRow, error) {
+	row := q.db.QueryRow(ctx, insertReservationHold,
+		arg.ID,
+		arg.CustomerID,
+		arg.BookingGroupID,
+		arg.RoomID,
+		arg.RoomTypeID,
+		arg.Column6,
+		arg.Column7,
+		arg.HoldMode,
+		arg.HoldToken,
+		arg.RedisKey,
+		arg.TtlSeconds,
+		arg.Status,
+		arg.ExpiresAt,
+		arg.CreatedAt,
+	)
+	var i InsertReservationHoldRow
+	err := row.Scan(
+		&i.ID,
+		&i.CustomerID,
+		&i.BookingGroupID,
+		&i.RoomID,
+		&i.RoomTypeID,
+		&i.CheckIn,
+		&i.CheckOut,
+		&i.HoldMode,
+		&i.HoldToken,
+		&i.RedisKey,
+		&i.TtlSeconds,
+		&i.Status,
+		&i.ExpiresAt,
+		&i.ReleasedReason,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const listReservationHoldsByGroupIDForUpdate = `-- name: ListReservationHoldsByGroupIDForUpdate :many
+SELECT
+    id, customer_id, booking_group_id, room_id, room_type_id,
+    lower(stay)::date AS check_in, upper(stay)::date AS check_out,
+    hold_mode, hold_token, redis_key, ttl_seconds,
+    status, expires_at, released_reason, created_at, updated_at
+FROM reservation_holds
+WHERE booking_group_id = $1
+ORDER BY id ASC
+FOR UPDATE
+`
+
+type ListReservationHoldsByGroupIDForUpdateRow struct {
+	ID             uuid.UUID   `json:"id"`
+	CustomerID     uuid.UUID   `json:"customer_id"`
+	BookingGroupID *uuid.UUID  `json:"booking_group_id"`
+	RoomID         uuid.UUID   `json:"room_id"`
+	RoomTypeID     uuid.UUID   `json:"room_type_id"`
+	CheckIn        pgtype.Date `json:"check_in"`
+	CheckOut       pgtype.Date `json:"check_out"`
+	HoldMode       string      `json:"hold_mode"`
+	HoldToken      string      `json:"hold_token"`
+	RedisKey       string      `json:"redis_key"`
+	TtlSeconds     int32       `json:"ttl_seconds"`
+	Status         string      `json:"status"`
+	ExpiresAt      time.Time   `json:"expires_at"`
+	ReleasedReason pgtype.Text `json:"released_reason"`
+	CreatedAt      time.Time   `json:"created_at"`
+	UpdatedAt      time.Time   `json:"updated_at"`
+}
+
+func (q *Queries) ListReservationHoldsByGroupIDForUpdate(ctx context.Context, bookingGroupID *uuid.UUID) ([]ListReservationHoldsByGroupIDForUpdateRow, error) {
+	rows, err := q.db.Query(ctx, listReservationHoldsByGroupIDForUpdate, bookingGroupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListReservationHoldsByGroupIDForUpdateRow{}
+	for rows.Next() {
+		var i ListReservationHoldsByGroupIDForUpdateRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.CustomerID,
+			&i.BookingGroupID,
+			&i.RoomID,
+			&i.RoomTypeID,
+			&i.CheckIn,
+			&i.CheckOut,
+			&i.HoldMode,
+			&i.HoldToken,
+			&i.RedisKey,
+			&i.TtlSeconds,
+			&i.Status,
+			&i.ExpiresAt,
+			&i.ReleasedReason,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listUnavailableRoomIDsForStay = `-- name: ListUnavailableRoomIDsForStay :many
@@ -77,4 +291,40 @@ func (q *Queries) ListUnavailableRoomIDsForStay(ctx context.Context, arg ListUna
 		return nil, err
 	}
 	return items, nil
+}
+
+const tryAdvisoryXactLockRoom = `-- name: TryAdvisoryXactLockRoom :one
+SELECT pg_try_advisory_xact_lock(hashtextextended($1::text, 0)) AS locked
+`
+
+func (q *Queries) TryAdvisoryXactLockRoom(ctx context.Context, dollar_1 string) (bool, error) {
+	row := q.db.QueryRow(ctx, tryAdvisoryXactLockRoom, dollar_1)
+	var locked bool
+	err := row.Scan(&locked)
+	return locked, err
+}
+
+const updateReservationHoldsStatus = `-- name: UpdateReservationHoldsStatus :exec
+UPDATE reservation_holds
+SET status = $2,
+    released_reason = $3,
+    updated_at = $4
+WHERE id = ANY($1::uuid[])
+`
+
+type UpdateReservationHoldsStatusParams struct {
+	Column1        []uuid.UUID `json:"column_1"`
+	Status         string      `json:"status"`
+	ReleasedReason pgtype.Text `json:"released_reason"`
+	UpdatedAt      time.Time   `json:"updated_at"`
+}
+
+func (q *Queries) UpdateReservationHoldsStatus(ctx context.Context, arg UpdateReservationHoldsStatusParams) error {
+	_, err := q.db.Exec(ctx, updateReservationHoldsStatus,
+		arg.Column1,
+		arg.Status,
+		arg.ReleasedReason,
+		arg.UpdatedAt,
+	)
+	return err
 }

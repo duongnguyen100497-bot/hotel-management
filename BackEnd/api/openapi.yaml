@@ -1521,6 +1521,56 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /api/v1/holds:
+    post:
+      summary: Acquire an atomic individual or group room hold via PostgreSQL and Redis Lua
+      operationId: createHold
+      tags:
+        - Booking
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHoldRequest"
+      responses:
+        "201":
+          description: Hold acquired
+        "409":
+          description: Rooms unavailable or held by another guest
+        "503":
+          description: Hold service unavailable (fail-closed)
+
+  /api/v1/holds/{id}:
+    delete:
+      summary: Release an active individual or group hold
+      operationId: releaseHold
+      tags:
+        - Booking
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: X-Hold-Token
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Hold released
+        "403":
+          description: Forbidden
+        "409":
+          description: Hold no longer active
+
 components:
   securitySchemes:
     BearerAuth:
@@ -2272,3 +2322,42 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/AvailabilityQuoteItem"
+
+    CreateHoldRequest:
+      type: object
+      required:
+        - checkIn
+        - checkOut
+        - items
+        - adults
+      properties:
+        customerId:
+          type: string
+          format: uuid
+        checkIn:
+          type: string
+          format: date
+        checkOut:
+          type: string
+          format: date
+        adults:
+          type: integer
+          minimum: 1
+        children:
+          type: integer
+          minimum: 0
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required:
+              - roomTypeId
+              - roomCount
+            properties:
+              roomTypeId:
+                type: string
+                format: uuid
+              roomCount:
+                type: integer
+                minimum: 1

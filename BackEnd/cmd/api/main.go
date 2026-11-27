@@ -1,14 +1,11 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -22,6 +19,7 @@ import (
 	bookingapp "github.com/trandinh0506/hotel-management/backend/internal/modules/booking/application"
 	bookinghttp "github.com/trandinh0506/hotel-management/backend/internal/modules/booking/delivery/http"
 	bookingpg "github.com/trandinh0506/hotel-management/backend/internal/modules/booking/persistence/postgres"
+	bookingredis "github.com/trandinh0506/hotel-management/backend/internal/modules/booking/persistence/redis"
 	identityapp "github.com/trandinh0506/hotel-management/backend/internal/modules/identity/application"
 	identityhttp "github.com/trandinh0506/hotel-management/backend/internal/modules/identity/delivery/http"
 	identitypg "github.com/trandinh0506/hotel-management/backend/internal/modules/identity/persistence/postgres"
@@ -49,6 +47,7 @@ import (
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/id"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/logging"
 	platformminio "github.com/trandinh0506/hotel-management/backend/internal/platform/minio"
+	platformredis "github.com/trandinh0506/hotel-management/backend/internal/platform/redis"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/smtp"
 )
 
@@ -126,9 +125,15 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		outboxWorker.Run(workerCtx)
 	}()
 
+	redisClient, err := platformredis.NewClient(cfg.RedisURL)
+	if err != nil {
+		return fmt.Errorf("init redis client: %w", err)
+	}
+	closers = append(closers, redisClient.Close)
+
 	deps := []platformhttp.DependencyCheck{
 		{Name: "postgres", Check: db.PingCheck(pool)},
-		{Name: "redis", Check: redisPingProbe(cfg.RedisURL)},
+		{Name: "redis", Check: redisClient.PingCheck()},
 	}
 	if cfg.MinIOEnabled {
 		deps = append(deps, platformhttp.DependencyCheck{
@@ -166,7 +171,9 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		WithUploadMaxBytes(cfg.UploadMaxBytes).
 		WithLogger(logger)
 	propertySvc.SetMediaResolver(mediaSvc)
-	bookingSvc := bookingapp.NewService(txRunner, bookingpg.NewRepository(pool), propertySvc, propertySvc, pricingSvc, peopleSvc, rbacSvc, auditSvc, auditSvc, sysClock, idGen)
+	bookingSvc := bookingapp.NewService(txRunner, bookingpg.NewRepository(pool), propertySvc, propertySvc, pricingSvc, peopleSvc, rbacSvc, auditSvc, auditSvc, sysClock, idGen).
+		WithHoldStore(bookingredis.NewHoldStore(redisClient)).
+		WithLogger(logger)
 	propertySvc.SetAvailabilityReader(bookingSvc)
 	peopleSvc.SetCustomerArchiveChecker(bookingSvc)
 	outboxWorker.Register(mediaapp.EventMediaObjectDeleteRequested, mediaSvc.HandleObjectDeleteRequested)
@@ -256,43 +263,6 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	}
 
 	return serveErr
-}
-
-func redisPingProbe(rawURL string) platformhttp.CheckFunc {
-	return func(ctx context.Context) error {
-		u, err := url.Parse(rawURL)
-		if err != nil {
-			return err
-		}
-		host := u.Host
-		if host == "" {
-			return errors.New("empty redis host")
-		}
-		if _, _, err := net.SplitHostPort(host); err != nil {
-			host = net.JoinHostPort(host, "6379")
-		}
-		var d net.Dialer
-		conn, err := d.DialContext(ctx, "tcp", host)
-		if err != nil {
-			return err
-		}
-		defer conn.Close()
-
-		if dl, ok := ctx.Deadline(); ok {
-			_ = conn.SetDeadline(dl)
-		}
-		if _, err := conn.Write([]byte("*1\r\n$4\r\nPING\r\n")); err != nil {
-			return err
-		}
-		line, err := bufio.NewReader(conn).ReadString('\n')
-		if err != nil {
-			return err
-		}
-		if !strings.HasPrefix(line, "+PONG") {
-			return fmt.Errorf("unexpected redis reply: %q", strings.TrimSpace(line))
-		}
-		return nil
-	}
 }
 
 func minioProbe(endpoint string, useSSL bool) platformhttp.CheckFunc {
