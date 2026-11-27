@@ -1,14 +1,11 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -16,15 +13,42 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	auditapp "github.com/trandinh0506/hotel-management/backend/internal/modules/audit/application"
 	auditpg "github.com/trandinh0506/hotel-management/backend/internal/modules/audit/persistence/postgres"
+	bookingapp "github.com/trandinh0506/hotel-management/backend/internal/modules/booking/application"
+	bookinghttp "github.com/trandinh0506/hotel-management/backend/internal/modules/booking/delivery/http"
+	bookingpg "github.com/trandinh0506/hotel-management/backend/internal/modules/booking/persistence/postgres"
+	bookingredis "github.com/trandinh0506/hotel-management/backend/internal/modules/booking/persistence/redis"
+	identityapp "github.com/trandinh0506/hotel-management/backend/internal/modules/identity/application"
+	identityhttp "github.com/trandinh0506/hotel-management/backend/internal/modules/identity/delivery/http"
+	identitypg "github.com/trandinh0506/hotel-management/backend/internal/modules/identity/persistence/postgres"
+	mediaapp "github.com/trandinh0506/hotel-management/backend/internal/modules/media/application"
+	mediahttp "github.com/trandinh0506/hotel-management/backend/internal/modules/media/delivery/http"
+	mediapg "github.com/trandinh0506/hotel-management/backend/internal/modules/media/persistence/postgres"
 	"github.com/trandinh0506/hotel-management/backend/internal/modules/notification"
+	peopleapp "github.com/trandinh0506/hotel-management/backend/internal/modules/people/application"
+	peoplehttp "github.com/trandinh0506/hotel-management/backend/internal/modules/people/delivery/http"
+	peoplepg "github.com/trandinh0506/hotel-management/backend/internal/modules/people/persistence/postgres"
+	pricingapp "github.com/trandinh0506/hotel-management/backend/internal/modules/pricing/application"
+	pricinghttp "github.com/trandinh0506/hotel-management/backend/internal/modules/pricing/delivery/http"
+	pricingpg "github.com/trandinh0506/hotel-management/backend/internal/modules/pricing/persistence/postgres"
+	propertyapp "github.com/trandinh0506/hotel-management/backend/internal/modules/property/application"
+	propertyhttp "github.com/trandinh0506/hotel-management/backend/internal/modules/property/delivery/http"
+	propertypg "github.com/trandinh0506/hotel-management/backend/internal/modules/property/persistence/postgres"
+	rbacapp "github.com/trandinh0506/hotel-management/backend/internal/modules/rbac/application"
+	rbachttp "github.com/trandinh0506/hotel-management/backend/internal/modules/rbac/delivery/http"
+	rbacpg "github.com/trandinh0506/hotel-management/backend/internal/modules/rbac/persistence/postgres"
+	"github.com/trandinh0506/hotel-management/backend/internal/platform/auth"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/clock"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/config"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/db"
 	platformhttp "github.com/trandinh0506/hotel-management/backend/internal/platform/http"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/id"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/logging"
+	platformminio "github.com/trandinh0506/hotel-management/backend/internal/platform/minio"
+	platformredis "github.com/trandinh0506/hotel-management/backend/internal/platform/redis"
+	"github.com/trandinh0506/hotel-management/backend/internal/platform/smtp"
 )
 
 func main() {
@@ -77,15 +101,39 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		BatchSize:    20,
 	})
 
+	payloadCipher, err := auth.NewPayloadCipher(cfg.JWTRefreshSecret)
+	if err != nil {
+		return fmt.Errorf("init outbox payload cipher: %w", err)
+	}
+	smtpClient := smtp.NewClient(smtp.Config{
+		Host:     cfg.SMTPHost,
+		Port:     cfg.SMTPPort,
+		Username: cfg.SMTPUser,
+		Password: cfg.SMTPPass,
+		From:     cfg.SMTPFrom,
+	})
+	_ = notification.NewEmailDispatcher(notification.EmailDispatcherConfig{
+		Sender:          smtpClient,
+		Cipher:          payloadCipher,
+		FrontendBaseURL: cfg.FrontendBaseURL,
+		PublicBaseURL:   cfg.PublicBaseURL,
+	}, outboxWorker)
+
 	workerWG.Add(1)
 	go func() {
 		defer workerWG.Done()
 		outboxWorker.Run(workerCtx)
 	}()
 
+	redisClient, err := platformredis.NewClient(cfg.RedisURL)
+	if err != nil {
+		return fmt.Errorf("init redis client: %w", err)
+	}
+	closers = append(closers, redisClient.Close)
+
 	deps := []platformhttp.DependencyCheck{
 		{Name: "postgres", Check: db.PingCheck(pool)},
-		{Name: "redis", Check: redisPingProbe(cfg.RedisURL)},
+		{Name: "redis", Check: redisClient.PingCheck()},
 	}
 	if cfg.MinIOEnabled {
 		deps = append(deps, platformhttp.DependencyCheck{
@@ -94,13 +142,93 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		})
 	}
 
+	var minioStorage platformminio.Storage
+	if cfg.MinIOEnabled {
+		mc, err := platformminio.NewClient(platformminio.Config{
+			Endpoint:      cfg.MinIOEndpoint,
+			AccessKey:     cfg.MinIOAccessKey,
+			SecretKey:     cfg.MinIOSecretKey,
+			Bucket:        cfg.MinIOBucket,
+			UseSSL:        cfg.MinIOUseSSL,
+			PublicBaseURL: cfg.MinIOPublicBaseURL,
+		})
+		if err != nil {
+			return fmt.Errorf("init minio client: %w", err)
+		}
+		minioStorage = mc
+	}
+
+	tokenManager := auth.NewTokenManager(cfg.JWTAccessSecret, cfg.JWTAccessTTL, cfg.JWTRefreshTTL, sysClock)
+	identitySvc := identityapp.NewService(txRunner, identitypg.NewRepository(pool), auditSvc, auditSvc, sysClock, idGen).
+		WithTokenManager(tokenManager).
+		WithPayloadCipher(payloadCipher)
+	rbacSvc := rbacapp.NewService(txRunner, rbacpg.NewRepository(pool), identitySvc, auditSvc, sysClock, idGen)
+	peopleSvc := peopleapp.NewService(txRunner, peoplepg.NewRepository(pool), identitySvc, rbacSvc, auditSvc, auditSvc, sysClock, idGen)
+	identitySvc.SetCustomerRegistrationHook(peopleSvc)
+	propertySvc := propertyapp.NewService(txRunner, propertypg.NewRepository(pool), rbacSvc, auditSvc, sysClock, idGen)
+	pricingSvc := pricingapp.NewService(txRunner, pricingpg.NewRepository(pool), propertySvc, rbacSvc, auditSvc, sysClock, idGen)
+	mediaSvc := mediaapp.NewService(txRunner, mediapg.NewRepository(pool), minioStorage, propertySvc, rbacSvc, auditSvc, auditSvc, sysClock, idGen).
+		WithUploadMaxBytes(cfg.UploadMaxBytes).
+		WithLogger(logger)
+	propertySvc.SetMediaResolver(mediaSvc)
+	bookingSvc := bookingapp.NewService(txRunner, bookingpg.NewRepository(pool), propertySvc, propertySvc, pricingSvc, peopleSvc, rbacSvc, auditSvc, auditSvc, sysClock, idGen).
+		WithHoldStore(bookingredis.NewHoldStore(redisClient)).
+		WithLogger(logger)
+	propertySvc.SetAvailabilityReader(bookingSvc)
+	peopleSvc.SetCustomerArchiveChecker(bookingSvc)
+	outboxWorker.Register(mediaapp.EventMediaObjectDeleteRequested, mediaSvc.HandleObjectDeleteRequested)
+
+	workerWG.Add(1)
+	go func() {
+		defer workerWG.Done()
+		mediaSvc.RunCleanupWorker(workerCtx, 15*time.Minute)
+	}()
+
+	workerWG.Add(1)
+	go func() {
+		defer workerWG.Done()
+		bookingSvc.RunExpiryScanner(workerCtx, 10*time.Second)
+	}()
+
+	workerWG.Add(1)
+	go func() {
+		defer workerWG.Done()
+		bookingSvc.RunReconciler(workerCtx, 90*time.Second)
+	}()
+
+	authMiddleware := auth.AuthenticatorMiddleware(tokenManager, identitySvc)
+	identityHandler := identityhttp.NewHandler(identityhttp.HandlerConfig{
+		Service:      identitySvc,
+		Tokens:       tokenManager,
+		SecureCookie: cfg.AppEnv == config.EnvProduction,
+	})
+	rbacHandler := rbachttp.NewHandler(rbacSvc)
+	peopleHandler := peoplehttp.NewHandler(peopleSvc, rbacSvc)
+	propertyHandler := propertyhttp.NewHandler(propertyhttp.HandlerConfig{
+		Service:    propertySvc,
+		Authorizer: rbacSvc,
+		Tokens:     tokenManager,
+		Verifier:   identitySvc,
+	})
+	pricingHandler := pricinghttp.NewHandler(pricingSvc, rbacSvc)
+	mediaHandler := mediahttp.NewHandler(mediaSvc, rbacSvc)
+	bookingHandler := bookinghttp.NewHandler(bookingSvc, rbacSvc)
+
 	router := platformhttp.NewRouter(platformhttp.RouterConfig{
 		Logger:             logger,
 		CORSAllowedOrigins: cfg.CORSAllowedOrigins,
 		BodyLimitBytes:     platformhttp.DefaultBodyLimitBytes,
 		ReadyzTimeout:      3 * time.Second,
 		ReadyzChecks:       deps,
-	}, nil)
+	}, func(api *gin.RouterGroup) {
+		identityHandler.RegisterRoutes(api, authMiddleware)
+		rbacHandler.RegisterRoutes(api, authMiddleware)
+		peopleHandler.RegisterRoutes(api, authMiddleware)
+		propertyHandler.RegisterRoutes(api, authMiddleware)
+		pricingHandler.RegisterRoutes(api, authMiddleware)
+		mediaHandler.RegisterRoutes(api, authMiddleware)
+		bookingHandler.RegisterRoutes(api, authMiddleware)
+	})
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -147,43 +275,6 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	}
 
 	return serveErr
-}
-
-func redisPingProbe(rawURL string) platformhttp.CheckFunc {
-	return func(ctx context.Context) error {
-		u, err := url.Parse(rawURL)
-		if err != nil {
-			return err
-		}
-		host := u.Host
-		if host == "" {
-			return errors.New("empty redis host")
-		}
-		if _, _, err := net.SplitHostPort(host); err != nil {
-			host = net.JoinHostPort(host, "6379")
-		}
-		var d net.Dialer
-		conn, err := d.DialContext(ctx, "tcp", host)
-		if err != nil {
-			return err
-		}
-		defer conn.Close()
-
-		if dl, ok := ctx.Deadline(); ok {
-			_ = conn.SetDeadline(dl)
-		}
-		if _, err := conn.Write([]byte("*1\r\n$4\r\nPING\r\n")); err != nil {
-			return err
-		}
-		line, err := bufio.NewReader(conn).ReadString('\n')
-		if err != nil {
-			return err
-		}
-		if !strings.HasPrefix(line, "+PONG") {
-			return fmt.Errorf("unexpected redis reply: %q", strings.TrimSpace(line))
-		}
-		return nil
-	}
 }
 
 func minioProbe(endpoint string, useSSL bool) platformhttp.CheckFunc {

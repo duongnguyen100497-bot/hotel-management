@@ -41,3 +41,264 @@ sql:
               import: "time"
               type: "Time"
               pointer: true
+
+  - engine: "postgresql"
+    queries: "db/query/identity.sql"
+    schema: "db/migration"
+    gen:
+      go:
+        package: "sqlcgen"
+        out: "internal/modules/identity/persistence/postgres/sqlcgen"
+        sql_package: "pgx/v5"
+        emit_interface: false
+        emit_json_tags: true
+        emit_empty_slices: true
+        overrides:
+          - db_type: "uuid"
+            go_type:
+              import: "github.com/google/uuid"
+              type: "UUID"
+          - db_type: "uuid"
+            nullable: true
+            go_type:
+              import: "github.com/google/uuid"
+              type: "UUID"
+              pointer: true
+          - db_type: "timestamptz"
+            go_type:
+              import: "time"
+              type: "Time"
+          - db_type: "timestamptz"
+            nullable: true
+            go_type:
+              import: "time"
+              type: "Time"
+              pointer: true
+
+  - engine: "postgresql"
+    queries: "db/query/rbac.sql"
+    schema: "db/migration"
+    gen:
+      go:
+        package: "sqlcgen"
+        out: "internal/modules/rbac/persistence/postgres/sqlcgen"
+        sql_package: "pgx/v5"
+        emit_interface: false
+        emit_json_tags: true
+        emit_empty_slices: true
+        overrides:
+          - db_type: "uuid"
+            go_type:
+              import: "github.com/google/uuid"
+              type: "UUID"
+          - db_type: "uuid"
+            nullable: true
+            go_type:
+              import: "github.com/google/uuid"
+              type: "UUID"
+              pointer: true
+          - db_type: "timestamptz"
+            go_type:
+              import: "time"
+              type: "Time"
+          - db_type: "timestamptz"
+            nullable: true
+            go_type:
+              import: "time"
+              type: "Time"
+              pointer: true
+
+  - engine: "postgresql"
+    queries: "db/query/people.sql"
+    schema: "db/migration"
+    gen:
+      go:
+        package: "sqlcgen"
+        out: "internal/modules/people/persistence/postgres/sqlcgen"
+        sql_package: "pgx/v5"
+        emit_interface: false
+        emit_json_tags: true
+        emit_empty_slices: true
+        overrides:
+          - db_type: "uuid"
+            go_type:
+              import: "github.com/google/uuid"
+              type: "UUID"
+          - db_type: "uuid"
+            nullable: true
+            go_type:
+              import: "github.com/google/uuid"
+              type: "UUID"
+              pointer: true
+          - db_type: "timestamptz"
+            go_type:
+              import: "time"
+              type: "Time"
+          - db_type: "timestamptz"
+            nullable: true
+            go_type:
+              import: "time"
+              type: "Time"
+              pointer: true
+
+  - engine: "postgresql"
+    queries:
+      - "db/query/property.sql"
+      - "db/query/rooms.sql"
+      - "db/query/service_catalog.sql"
+    schema: "db/migration"
+    gen:
+      go:
+        package: "sqlcgen"
+        out: "internal/modules/property/persistence/postgres/sqlcgen"
+        sql_package: "pgx/v5"
+        emit_interface: false
+        emit_json_tags: true
+        emit_empty_slices: true
+        overrides:
+          - db_type: "uuid"
+            go_type:
+              import: "github.com/google/uuid"
+              type: "UUID"
+          - db_type: "uuid"
+            nullable: true
+            go_type:
+              import: "github.com/google/uuid"
+              type: "UUID"
+              pointer: true
+          - db_type: "pg_catalog.numeric"
+            go_type:
+              import: "github.com/shopspring/decimal"
+              type: "Decimal"
+          - db_type: "pg_catalog.numeric"
+            nullable: true
+            go_type:
+              import: "github.com/shopspring/decimal"
+              type: "NullDecimal"
+          - db_type: "timestamptz"
+            go_type:
+              import: "time"
+              type: "Time"
+          - db_type: "timestamptz"
+            nullable: true
+            go_type:
+              import: "time"
+              type: "Time"
+              pointer: true
+
+  - engine: "postgresql"
+    queries: "db/query/pricing.sql"
+    schema: "db/migration"
+    gen:
+      go:
+        package: "sqlcgen"
+        out: "internal/modules/pricing/persistence/postgres/sqlcgen"
+        sql_package: "pgx/v5"
+        emit_interface: false
+        emit_json_tags: true
+        emit_empty_slices: true
+        overrides:
+          - db_type: "uuid"
+            go_type:
+              import: "github.com/google/uuid"
+              type: "UUID"
+          - db_type: "uuid"
+            nullable: true
+            go_type:
+              import: "github.com/google/uuid"
+              type: "UUID"
+              pointer: true
+          - db_type: "pg_catalog.numeric"
+            go_type:
+              import: "github.com/shopspring/decimal"
+              type: "Decimal"
+          - db_type: "pg_catalog.numeric"
+            nullable: true
+            go_type:
+              import: "github.com/shopspring/decimal"
+              type: "NullDecimal"
+          - db_type: "timestamptz"
+            go_type:
+              import: "time"
+              type: "Time"
+          - db_type: "timestamptz"
+            nullable: true
+            go_type:
+              import: "time"
+              type: "Time"
+              pointer: true
+
+  - engine: "postgresql"
+    queries: "db/query/media.sql"
+    schema: "db/migration"
+    gen:
+      go:
+        package: "sqlcgen"
+        out: "internal/modules/media/persistence/postgres/sqlcgen"
+        sql_package: "pgx/v5"
+        emit_interface: false
+        emit_json_tags: true
+        emit_empty_slices: true
+        overrides:
+          - db_type: "uuid"
+            go_type:
+              import: "github.com/google/uuid"
+              type: "UUID"
+          - db_type: "uuid"
+            nullable: true
+            go_type:
+              import: "github.com/google/uuid"
+              type: "UUID"
+              pointer: true
+          - db_type: "timestamptz"
+            go_type:
+              import: "time"
+              type: "Time"
+          - db_type: "timestamptz"
+            nullable: true
+            go_type:
+              import: "time"
+              type: "Time"
+              pointer: true
+
+  - engine: "postgresql"
+    queries: "db/query/booking.sql"
+    schema: "db/migration"
+    gen:
+      go:
+        package: "sqlcgen"
+        out: "internal/modules/booking/persistence/postgres/sqlcgen"
+        sql_package: "pgx/v5"
+        emit_interface: false
+        emit_json_tags: true
+        emit_empty_slices: true
+        overrides:
+          - db_type: "uuid"
+            go_type:
+              import: "github.com/google/uuid"
+              type: "UUID"
+          - db_type: "uuid"
+            nullable: true
+            go_type:
+              import: "github.com/google/uuid"
+              type: "UUID"
+              pointer: true
+          - db_type: "pg_catalog.numeric"
+            go_type:
+              import: "github.com/shopspring/decimal"
+              type: "Decimal"
+          - db_type: "pg_catalog.numeric"
+            nullable: true
+            go_type:
+              import: "github.com/shopspring/decimal"
+              type: "NullDecimal"
+          - db_type: "timestamptz"
+            go_type:
+              import: "time"
+              type: "Time"
+          - db_type: "timestamptz"
+            nullable: true
+            go_type:
+              import: "time"
+              type: "Time"
+              pointer: true

@@ -42,6 +42,1709 @@ paths:
               schema:
                 $ref: "#/components/schemas/ReadyResponse"
 
+  /api/v1/auth/register:
+    post:
+      summary: Register a new customer account
+      operationId: registerCustomer
+      tags:
+        - Auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: Customer registered and authenticated session opened
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "409":
+          description: Email already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/auth/login:
+    post:
+      summary: Authenticate with email and Argon2id password
+      operationId: loginUser
+      tags:
+        - Auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Authenticated successfully (sets rotating refresh cookie)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/auth/refresh:
+    post:
+      summary: Rotate refresh token cookie and mint new access token
+      operationId: refreshAuthSession
+      tags:
+        - Auth
+      responses:
+        "200":
+          description: Rotated refresh cookie and minted access token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          description: Invalid, expired, or replayed refresh token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/auth/logout:
+    post:
+      summary: Revoke current or all active sessions and clear refresh cookie
+      operationId: logoutUser
+      tags:
+        - Auth
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: all
+          in: query
+          required: false
+          schema:
+            type: boolean
+      responses:
+        "204":
+          description: Session revoked
+        "401":
+          description: Unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/auth/password-reset-requests:
+    post:
+      summary: Request a single-use password reset link via email
+      operationId: requestPasswordReset
+      tags:
+        - Auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PasswordResetRequest"
+      responses:
+        "202":
+          description: Request accepted (uniform response whether or not email exists)
+        "422":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/auth/password-reset-confirm:
+    post:
+      summary: Confirm password reset with single-use token and revoke prior sessions
+      operationId: confirmPasswordReset
+      tags:
+        - Auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PasswordResetConfirmRequest"
+      responses:
+        "200":
+          description: Password reset confirmed and all sessions revoked
+        "401":
+          description: Invalid, expired, or already-used reset token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/auth/activate:
+    post:
+      summary: Activate pending staff user account using single-use email token and set initial password
+      operationId: activateStaffAccount
+      tags:
+        - Auth
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PasswordResetConfirmRequest"
+      responses:
+        "200":
+          description: Account activated and session issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          description: Invalid, expired, or already-used activation token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/admin/employees:
+    get:
+      summary: List employees with account status and assigned roles
+      operationId: listEmployees
+      tags:
+        - People
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Employee list
+    post:
+      summary: Create employee profile, pending staff user, and enqueue SMTP activation link
+      operationId: createEmployee
+      tags:
+        - People
+      security:
+        - BearerAuth: []
+      responses:
+        "201":
+          description: Employee created in pending_activation status
+        "409":
+          description: Duplicate employee code or email
+
+  /api/v1/admin/employees/{id}:
+    get:
+      summary: Get employee details
+      operationId: getEmployee
+      tags:
+        - People
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Employee details
+    patch:
+      summary: Update employee profile with optimistic locking (version)
+      operationId: updateEmployee
+      tags:
+        - People
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Employee updated
+        "409":
+          description: Version conflict
+
+  /api/v1/admin/employees/{id}/resend-activation:
+    post:
+      summary: Invalidate old activation tokens and resend SMTP activation link
+      operationId: resendEmployeeActivation
+      tags:
+        - People
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "202":
+          description: New activation email queued
+        "409":
+          description: Account is already active or disabled
+
+  /api/v1/admin/employees/{id}/deactivate:
+    post:
+      summary: Deactivate employee, disable user account, and revoke all active sessions
+      operationId: deactivateEmployee
+      tags:
+        - People
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Employee deactivated
+        "409":
+          description: Cannot deactivate last active root admin
+
+  /api/v1/customers:
+    get:
+      summary: List customers with search and cursor pagination (masks governmentId)
+      operationId: listCustomers
+      tags:
+        - People
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: q
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated customer list
+    post:
+      summary: Create a walk-in customer profile (user_id = NULL)
+      operationId: createWalkInCustomer
+      tags:
+        - People
+      security:
+        - BearerAuth: []
+      responses:
+        "201":
+          description: Walk-in customer created
+
+  /api/v1/customers/{id}:
+    get:
+      summary: Get customer profile by ID
+      operationId: getCustomer
+      tags:
+        - People
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Customer details
+    patch:
+      summary: Update customer profile with optimistic locking (version)
+      operationId: updateCustomer
+      tags:
+        - People
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Customer updated
+        "409":
+          description: Version or duplicate governmentId conflict
+
+  /api/v1/customers/{id}/archive:
+    post:
+      summary: Soft-archive a customer profile
+      operationId: archiveCustomer
+      tags:
+        - People
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Customer archived
+
+  /api/v1/me:
+    get:
+      summary: Get authenticated caller's own user and customer/employee profile
+      operationId: getMe
+      tags:
+        - SelfService
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Self-service profile
+    patch:
+      summary: Update authenticated caller's own profile (login email is immutable)
+      operationId: updateMe
+      tags:
+        - SelfService
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Updated self-service profile
+
+  /api/v1/me/password:
+    post:
+      summary: Verify current password, update Argon2id hash, and revoke other sessions
+      operationId: changeOwnPassword
+      tags:
+        - SelfService
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Password changed
+
+  /api/v1/me/sessions:
+    get:
+      summary: List caller's own active login sessions
+      operationId: listOwnSessions
+      tags:
+        - SelfService
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Active sessions list
+
+  /api/v1/me/sessions/{id}:
+    delete:
+      summary: Revoke one of the caller's own sessions
+      operationId: revokeOwnSession
+      tags:
+        - SelfService
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Session revoked
+        "404":
+          description: Session not found or owned by another user
+
+  /api/v1/permissions:
+    get:
+      summary: List all active permissions
+      operationId: listPermissions
+      tags:
+        - RBAC
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Active permission registry
+        "401":
+          description: Unauthenticated
+        "403":
+          description: Forbidden
+    post:
+      summary: Create a custom permission code (code is immutable after creation)
+      operationId: createPermission
+      tags:
+        - RBAC
+      security:
+        - BearerAuth: []
+      responses:
+        "201":
+          description: Permission created
+        "403":
+          description: Forbidden
+        "409":
+          description: Duplicate permission code
+
+  /api/v1/permissions/{id}:
+    patch:
+      summary: Update permission display name and description
+      operationId: updatePermission
+      tags:
+        - RBAC
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Permission updated
+        "403":
+          description: Forbidden
+
+  /api/v1/roles:
+    get:
+      summary: List active roles and their assigned permissions
+      operationId: listRoles
+      tags:
+        - RBAC
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Roles list
+    post:
+      summary: Create a custom non-system role
+      operationId: createRole
+      tags:
+        - RBAC
+      security:
+        - BearerAuth: []
+      responses:
+        "201":
+          description: Role created
+        "403":
+          description: Forbidden
+        "409":
+          description: Duplicate role code
+
+  /api/v1/roles/{id}:
+    patch:
+      summary: Update role display name and description
+      operationId: updateRole
+      tags:
+        - RBAC
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Role updated
+    delete:
+      summary: Archive a custom role when no users are assigned
+      operationId: deleteRole
+      tags:
+        - RBAC
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Role archived
+        "409":
+          description: Role is system/root or still has assigned users
+
+  /api/v1/roles/{id}/permissions:
+    put:
+      summary: Replace a role's permission bindings (enforces grantable-set and bumps authorization_version)
+      operationId: setRolePermissions
+      tags:
+        - RBAC
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Role permissions updated
+        "403":
+          description: Privilege escalation denied
+        "409":
+          description: Root role permissions are immutable
+
+  /api/v1/users:
+    get:
+      summary: List users and their assigned roles
+      operationId: listUsers
+      tags:
+        - RBAC
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Users with roles
+
+  /api/v1/users/{id}/roles:
+    put:
+      summary: Replace a staff/admin user's assigned roles (protects last root admin and bumps authorization_version)
+      operationId: setUserRoles
+      tags:
+        - RBAC
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: User roles updated
+        "403":
+          description: Privilege escalation denied
+        "409":
+          description: Cannot remove root role from last active root admin
+
+  /api/v1/hotel/settings:
+    get:
+      summary: Get single-hotel settings (public display fields unauthenticated; full settings with version for hotel_settings.read)
+      operationId: getHotelSettings
+      tags:
+        - Property
+      responses:
+        "200":
+          description: Hotel settings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/HotelSettings"
+    put:
+      summary: Update single-hotel operational settings (including individual/group hold TTLs and free cancellation hours)
+      operationId: updateHotelSettings
+      tags:
+        - Property
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: If-Match
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateHotelSettingsRequest"
+      responses:
+        "200":
+          description: Hotel settings updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/HotelSettings"
+        "403":
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Version conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Validation error (e.g. out-of-bounds hold TTL or free_cancel_hours)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/vat-rates:
+    get:
+      summary: List VAT rates (active rate first)
+      operationId: listVATRates
+      tags:
+        - Pricing
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: VAT rates list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/VATRate"
+    post:
+      summary: Create a VAT rate (activating atomically deactivates prior active rate)
+      operationId: createVATRate
+      tags:
+        - Pricing
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVATRateRequest"
+      responses:
+        "201":
+          description: VAT rate created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/VATRate"
+        "409":
+          description: Duplicate code
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/vat-rates/{id}:
+    patch:
+      summary: Update a VAT rate with optimistic locking (activating atomically deactivates prior active rate)
+      operationId: updateVATRate
+      tags:
+        - Pricing
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: If-Match
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateVATRateRequest"
+      responses:
+        "200":
+          description: VAT rate updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/VATRate"
+        "409":
+          description: Version conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/vat-rates/{id}/deactivate:
+    post:
+      summary: Deactivate a VAT rate without deleting historical snapshots
+      operationId: deactivateVATRate
+      tags:
+        - Pricing
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: VAT rate deactivated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/VATRate"
+
+  /api/v1/catalog/room-types:
+    get:
+      summary: Search public bookable room types with price/capacity filters, sort, and cursor pagination
+      operationId: searchPublicRoomTypes
+      tags:
+        - Catalog
+      parameters:
+        - name: capacity
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+        - name: minPrice
+          in: query
+          schema:
+            type: string
+        - name: maxPrice
+          in: query
+          schema:
+            type: string
+        - name: checkIn
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: checkOut
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum:
+              - price_asc
+              - price_desc
+              - capacity_asc
+              - capacity_desc
+              - created_asc
+              - created_desc
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated public room types
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - data
+                  - page
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RoomType"
+                  page:
+                    $ref: "#/components/schemas/PageInfo"
+
+  /api/v1/catalog/room-types/{code}:
+    get:
+      summary: Get public bookable room type details by code
+      operationId: getPublicRoomTypeByCode
+      tags:
+        - Catalog
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Room type details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/RoomType"
+        "404":
+          description: Not found or not bookable
+
+  /api/v1/room-types:
+    get:
+      summary: List room types for staff/admin
+      operationId: listRoomTypes
+      tags:
+        - Property
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: includeArchived
+          in: query
+          schema:
+            type: boolean
+        - name: isBookable
+          in: query
+          schema:
+            type: boolean
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated room types
+    post:
+      summary: Create a room type (`room_type.manage`)
+      operationId: createRoomType
+      tags:
+        - Property
+      security:
+        - BearerAuth: []
+      responses:
+        "201":
+          description: Room type created
+        "409":
+          description: Duplicate code
+
+  /api/v1/room-types/{id}:
+    patch:
+      summary: Update room type with optimistic locking (`room_type.manage`)
+      operationId: updateRoomType
+      tags:
+        - Property
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: If-Match
+          in: header
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Room type updated
+        "409":
+          description: Version conflict
+
+  /api/v1/rooms:
+    get:
+      summary: List physical rooms (`property.read`)
+      operationId: listRooms
+      tags:
+        - Property
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: roomTypeId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: operationalStatus
+          in: query
+          schema:
+            type: string
+            enum:
+              - available
+              - occupied
+              - cleaning
+              - maintenance
+        - name: floor
+          in: query
+          schema:
+            type: integer
+        - name: includeArchived
+          in: query
+          schema:
+            type: boolean
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated physical rooms
+    post:
+      summary: Create a physical room (`room.create`)
+      operationId: createRoom
+      tags:
+        - Property
+      security:
+        - BearerAuth: []
+      responses:
+        "201":
+          description: Room created
+        "403":
+          description: Forbidden
+        "409":
+          description: Duplicate room code
+
+  /api/v1/rooms/{id}:
+    patch:
+      summary: Update physical room metadata with optimistic locking (`room.update` — never mutates operationalStatus)
+      operationId: updateRoom
+      tags:
+        - Property
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: If-Match
+          in: header
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Room updated
+        "409":
+          description: Version or code conflict
+
+  /api/v1/rooms/{id}/archive:
+    post:
+      summary: Soft-archive a physical room (`room.archive`, forbidden while occupied)
+      operationId: archiveRoom
+      tags:
+        - Property
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Room archived
+        "409":
+          description: Room is occupied or version conflict
+
+  /api/v1/rooms/{id}/maintenance:
+    post:
+      summary: Enter or exit room maintenance state (`room.state.update`)
+      operationId: transitionRoomMaintenance
+      tags:
+        - Property
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - action
+              properties:
+                action:
+                  type: string
+                  enum:
+                    - enter
+                    - exit
+                reason:
+                  type: string
+                version:
+                  type: integer
+      responses:
+        "200":
+          description: Room state updated and history recorded
+        "409":
+          description: Illegal state transition (e.g. room is occupied)
+        "422":
+          description: Missing reason on enter
+
+  /api/v1/rooms/{id}/ready:
+    post:
+      summary: Transition room from cleaning or maintenance to available (`room.state.update`)
+      operationId: markRoomReady
+      tags:
+        - Property
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Room marked available
+        "409":
+          description: Room is occupied or already available
+
+  /api/v1/rooms/{id}/state-history:
+    get:
+      summary: List immutable operational state transition history for a room (`property.read`)
+      operationId: listRoomStateHistory
+      tags:
+        - Property
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated room state history
+
+  /api/v1/services:
+    get:
+      summary: List ancillary hotel services with category/isActive filters (`service.read`)
+      operationId: listServices
+      tags:
+        - Services
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: category
+          in: query
+          schema:
+            type: string
+        - name: isActive
+          in: query
+          schema:
+            type: boolean
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated service catalog items
+    post:
+      summary: Create an ancillary hotel service (`service.manage`, VAT-exclusive unitPrice)
+      operationId: createService
+      tags:
+        - Services
+      security:
+        - BearerAuth: []
+      responses:
+        "201":
+          description: Service created
+        "403":
+          description: Forbidden
+        "409":
+          description: Duplicate service code
+
+  /api/v1/services/{id}:
+    patch:
+      summary: Update an ancillary hotel service with optimistic locking (`service.manage`)
+      operationId: updateService
+      tags:
+        - Services
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: If-Match
+          in: header
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Service updated
+        "409":
+          description: Version conflict
+
+  /api/v1/services/{id}/deactivate:
+    post:
+      summary: Deactivate a service item (`service.manage`) without deleting historical consumption snapshots
+      operationId: deactivateService
+      tags:
+        - Services
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Service deactivated
+
+  /api/v1/media/uploads:
+    post:
+      summary: Request a short-lived presigned PUT URL for uploading an image to MinIO (`media.manage`)
+      operationId: requestMediaUpload
+      tags:
+        - Media
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RequestMediaUploadRequest"
+      responses:
+        "201":
+          description: Presigned upload ticket issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/UploadTicket"
+        "403":
+          description: Forbidden
+        "422":
+          description: Disallowed declared content type or invalid file name
+
+  /api/v1/media/{id}/complete:
+    post:
+      summary: Inspect uploaded MinIO object magic bytes and bitmap dimensions, mark ready, and optionally link to room/roomType (`media.manage`)
+      operationId: completeMediaUpload
+      tags:
+        - Media
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompleteMediaUploadRequest"
+      responses:
+        "200":
+          description: Media asset validated and marked ready
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/MediaAsset"
+        "422":
+          description: Magic-byte mismatch, corrupt bitmap, SVG/HTML/executable payload, or exceeds UPLOAD_MAX_BYTES
+
+  /api/v1/media/{id}:
+    delete:
+      summary: Unlink media asset, mark deletion_pending, and enqueue MinIO object removal via transactional outbox (`media.manage`)
+      operationId: deleteMediaAsset
+      tags:
+        - Media
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Media deletion scheduled
+
+  /api/v1/rooms/{id}/media:
+    post:
+      summary: Link a ready media asset to a physical room (`media.manage`)
+      operationId: linkRoomMedia
+      tags:
+        - Media
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LinkRoomMediaRequest"
+      responses:
+        "201":
+          description: Room media linked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/RoomMediaLink"
+
+  /api/v1/rooms/{id}/media/{mediaId}:
+    patch:
+      summary: Update sort order or cover flag for a linked room media asset (`media.manage`)
+      operationId: updateRoomMedia
+      tags:
+        - Media
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: mediaId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRoomMediaRequest"
+      responses:
+        "200":
+          description: Room media link updated
+
+  /api/v1/room-types/{id}/media:
+    post:
+      summary: Link a ready media asset to a room type (`media.manage`)
+      operationId: linkRoomTypeMedia
+      tags:
+        - Media
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LinkRoomMediaRequest"
+      responses:
+        "201":
+          description: Room type media linked
+
+  /api/v1/room-types/{id}/media/{mediaId}:
+    patch:
+      summary: Update sort order or cover flag for a linked room type media asset (`media.manage`)
+      operationId: updateRoomTypeMedia
+      tags:
+        - Media
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: mediaId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRoomMediaRequest"
+      responses:
+        "200":
+          description: Room type media link updated
+
+  /api/v1/availability/quote:
+    post:
+      summary: Check live room availability and compute VAT-exclusive quote without creating a hold
+      operationId: quoteAvailability
+      tags:
+        - Booking
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AvailabilityQuoteRequest"
+      responses:
+        "200":
+          description: Availability and pricing breakdown
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/AvailabilityQuote"
+        "422":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/holds:
+    post:
+      summary: Acquire an atomic individual or group room hold via PostgreSQL and Redis Lua
+      operationId: createHold
+      tags:
+        - Booking
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHoldRequest"
+      responses:
+        "201":
+          description: Hold acquired
+        "409":
+          description: Rooms unavailable or held by another guest
+        "503":
+          description: Hold service unavailable (fail-closed)
+
+  /api/v1/holds/{id}:
+    delete:
+      summary: Release an active individual or group hold
+      operationId: releaseHold
+      tags:
+        - Booking
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: X-Hold-Token
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Hold released
+        "403":
+          description: Forbidden
+        "409":
+          description: Hold no longer active
+
+  /api/v1/bookings:
+    post:
+      summary: Create an individual booking from a hold (or staff walk-in) with idempotency
+      operationId: createBooking
+      tags:
+        - Booking
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        "201":
+          description: Booking created
+        "200":
+          description: Idempotent replay of existing booking
+        "409":
+          description: Hold expired or room overlap conflict
+    get:
+      summary: List bookings (staff booking.read)
+      operationId: listBookings
+      tags:
+        - Booking
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Paginated list of bookings
+
+  /api/v1/me/bookings:
+    get:
+      summary: List authenticated customer's own bookings
+      operationId: listMyBookings
+      tags:
+        - Booking
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Paginated list of customer's bookings
+
+  /api/v1/bookings/{id}:
+    get:
+      summary: Get booking detail by ID (staff booking.read or booking owner)
+      operationId: getBooking
+      tags:
+        - Booking
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Booking detail
+
+  /api/v1/bookings/{id}/confirm:
+    post:
+      summary: Manually confirm a pending booking (staff booking.confirm)
+      operationId: confirmBooking
+      tags:
+        - Booking
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Booking confirmed
+
+  /api/v1/booking-groups:
+    post:
+      summary: Create a multi-room booking group aggregate atomically from a group hold
+      operationId: createBookingGroup
+      tags:
+        - Booking
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        "201":
+          description: Booking group created
+        "200":
+          description: Idempotent replay of existing booking group
+        "409":
+          description: Hold expired or room overlap conflict (rolled back atomically)
+
+  /api/v1/booking-groups/{id}:
+    get:
+      summary: Get booking group aggregate with totals and child bookings
+      operationId: getBookingGroup
+      tags:
+        - Booking
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Booking group detail
+
+  /api/v1/me/booking-groups:
+    get:
+      summary: List authenticated customer's own booking groups
+      operationId: listMyBookingGroups
+      tags:
+        - Booking
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Paginated list of customer booking groups
+
+  /api/v1/bookings/{id}/cancel:
+    post:
+      summary: Cancel a single pending or confirmed booking (does not cancel sibling rooms in group)
+      operationId: cancelBooking
+      tags:
+        - Booking
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Booking cancelled
+        "403":
+          description: Forbidden
+        "409":
+          description: Booking cannot be cancelled in its current status
+
+  /api/v1/bookings/batch/cancel:
+    post:
+      summary: Atomically cancel 1..50 bookings (all-or-nothing under sorted UUID locks)
+      operationId: batchCancelBookings
+      tags:
+        - Booking
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: All requested bookings cancelled atomically
+        "403":
+          description: Forbidden on one or more bookings (entire batch rolled back)
+        "409":
+          description: One or more bookings invalid to cancel (entire batch rolled back)
+
 components:
   securitySchemes:
     BearerAuth:
@@ -143,3 +1846,692 @@ components:
           type: array
           items:
             type: string
+
+    RegisterRequest:
+      type: object
+      required:
+        - email
+        - password
+        - displayName
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+        displayName:
+          type: string
+        phone:
+          type: string
+
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+
+    PasswordResetRequest:
+      type: object
+      required:
+        - email
+      properties:
+        email:
+          type: string
+          format: email
+
+    PasswordResetConfirmRequest:
+      type: object
+      required:
+        - token
+        - password
+      properties:
+        token:
+          type: string
+        password:
+          type: string
+          minLength: 8
+
+    UserSummary:
+      type: object
+      required:
+        - id
+        - kind
+        - email
+        - displayName
+        - status
+        - authorizationVersion
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum:
+            - customer
+            - staff
+            - admin
+        email:
+          type: string
+          format: email
+        username:
+          type: string
+        displayName:
+          type: string
+        status:
+          type: string
+          enum:
+            - pending_activation
+            - active
+            - disabled
+        authorizationVersion:
+          type: integer
+
+    AuthResponse:
+      type: object
+      required:
+        - accessToken
+        - expiresIn
+        - user
+      properties:
+        accessToken:
+          type: string
+        expiresIn:
+          type: integer
+        user:
+          $ref: "#/components/schemas/UserSummary"
+
+    HotelSettings:
+      type: object
+      required:
+        - name
+        - address
+        - phone
+        - email
+        - timezone
+        - currency
+        - checkInTime
+        - checkOutTime
+        - individualHoldTtlMinutes
+        - groupHoldTtlMinutes
+        - freeCancelHours
+      properties:
+        name:
+          type: string
+        address:
+          type: string
+        phone:
+          type: string
+        email:
+          type: string
+          format: email
+        timezone:
+          type: string
+        currency:
+          type: string
+        checkInTime:
+          type: string
+        checkOutTime:
+          type: string
+        individualHoldTtlMinutes:
+          type: integer
+          minimum: 1
+          maximum: 120
+        groupHoldTtlMinutes:
+          type: integer
+          minimum: 1
+          maximum: 180
+        freeCancelHours:
+          type: integer
+          minimum: 0
+        logoMediaId:
+          type: string
+          format: uuid
+          nullable: true
+        logoUrl:
+          type: string
+        updatedAt:
+          type: string
+          format: date-time
+        version:
+          type: integer
+
+    UpdateHotelSettingsRequest:
+      type: object
+      required:
+        - name
+        - address
+        - phone
+        - email
+        - timezone
+        - currency
+        - checkInTime
+        - checkOutTime
+        - individualHoldTtlMinutes
+        - groupHoldTtlMinutes
+        - freeCancelHours
+      properties:
+        name:
+          type: string
+        address:
+          type: string
+        phone:
+          type: string
+        email:
+          type: string
+          format: email
+        timezone:
+          type: string
+        currency:
+          type: string
+        checkInTime:
+          type: string
+        checkOutTime:
+          type: string
+        individualHoldTtlMinutes:
+          type: integer
+          minimum: 1
+          maximum: 120
+        groupHoldTtlMinutes:
+          type: integer
+          minimum: 1
+          maximum: 180
+        freeCancelHours:
+          type: integer
+          minimum: 0
+        logoMediaId:
+          type: string
+          format: uuid
+          nullable: true
+        version:
+          type: integer
+          minimum: 1
+
+    VATRate:
+      type: object
+      required:
+        - id
+        - code
+        - name
+        - rate
+        - isActive
+        - version
+      properties:
+        id:
+          type: string
+          format: uuid
+        code:
+          type: string
+        name:
+          type: string
+        rate:
+          type: string
+          description: Exact decimal rate in [0, 1], e.g. "0.10"
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        version:
+          type: integer
+
+    CreateVATRateRequest:
+      type: object
+      required:
+        - code
+        - name
+        - rate
+      properties:
+        code:
+          type: string
+        name:
+          type: string
+        rate:
+          type: string
+        isActive:
+          type: boolean
+
+    UpdateVATRateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        rate:
+          type: string
+        isActive:
+          type: boolean
+        version:
+          type: integer
+          minimum: 1
+
+    MediaItem:
+      type: object
+      required:
+        - mediaId
+        - url
+        - isCover
+        - sortOrder
+      properties:
+        mediaId:
+          type: string
+          format: uuid
+        url:
+          type: string
+        isCover:
+          type: boolean
+        sortOrder:
+          type: integer
+        mimeType:
+          type: string
+        width:
+          type: integer
+        height:
+          type: integer
+
+    RoomType:
+      type: object
+      required:
+        - id
+        - code
+        - name
+        - baseNightlyRate
+        - currency
+        - capacity
+        - amenities
+        - isBookable
+        - version
+      properties:
+        id:
+          type: string
+          format: uuid
+        code:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        baseNightlyRate:
+          type: string
+        currency:
+          type: string
+        capacity:
+          type: integer
+        areaSqm:
+          type: string
+        bedType:
+          type: string
+        amenities:
+          type: array
+          items:
+            type: string
+        isBookable:
+          type: boolean
+        operationalRoomCount:
+          type: integer
+        coverUrl:
+          type: string
+        media:
+          type: array
+          items:
+            $ref: "#/components/schemas/MediaItem"
+        archivedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        version:
+          type: integer
+
+    Room:
+      type: object
+      required:
+        - id
+        - code
+        - name
+        - roomTypeId
+        - floor
+        - capacity
+        - operationalStatus
+        - version
+      properties:
+        id:
+          type: string
+          format: uuid
+        code:
+          type: string
+        name:
+          type: string
+        roomTypeId:
+          type: string
+          format: uuid
+        roomTypeCode:
+          type: string
+        roomTypeName:
+          type: string
+        floor:
+          type: integer
+        capacity:
+          type: integer
+        operationalStatus:
+          type: string
+          enum:
+            - available
+            - occupied
+            - cleaning
+            - maintenance
+        description:
+          type: string
+        coverUrl:
+          type: string
+        media:
+          type: array
+          items:
+            $ref: "#/components/schemas/MediaItem"
+        archivedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        version:
+          type: integer
+
+    RequestMediaUploadRequest:
+      type: object
+      required:
+        - fileName
+        - contentType
+      properties:
+        fileName:
+          type: string
+          maxLength: 255
+        contentType:
+          type: string
+          enum:
+            - image/jpeg
+            - image/png
+            - image/webp
+
+    UploadTicket:
+      type: object
+      required:
+        - mediaId
+        - uploadUrl
+        - contentType
+        - maxBytes
+        - expiresAt
+      properties:
+        mediaId:
+          type: string
+          format: uuid
+        uploadUrl:
+          type: string
+          format: uri
+        contentType:
+          type: string
+        maxBytes:
+          type: integer
+        expiresAt:
+          type: string
+          format: date-time
+
+    CompleteMediaUploadRequest:
+      type: object
+      properties:
+        roomId:
+          type: string
+          format: uuid
+        roomTypeId:
+          type: string
+          format: uuid
+        sortOrder:
+          type: integer
+        isCover:
+          type: boolean
+
+    MediaAsset:
+      type: object
+      required:
+        - id
+        - status
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        sha256:
+          type: string
+        mimeType:
+          type: string
+        byteSize:
+          type: integer
+        width:
+          type: integer
+        height:
+          type: integer
+        status:
+          type: string
+          enum:
+            - pending
+            - ready
+            - deletion_pending
+            - deleted
+        url:
+          type: string
+        uploadedBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    LinkRoomMediaRequest:
+      type: object
+      required:
+        - mediaId
+      properties:
+        mediaId:
+          type: string
+          format: uuid
+        sortOrder:
+          type: integer
+        isCover:
+          type: boolean
+
+    UpdateRoomMediaRequest:
+      type: object
+      properties:
+        sortOrder:
+          type: integer
+        isCover:
+          type: boolean
+
+    RoomMediaLink:
+      type: object
+      required:
+        - id
+        - mediaId
+        - sortOrder
+        - isCover
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        roomId:
+          type: string
+          format: uuid
+        roomTypeId:
+          type: string
+          format: uuid
+        mediaId:
+          type: string
+          format: uuid
+        sortOrder:
+          type: integer
+        isCover:
+          type: boolean
+        url:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    AvailabilityQuoteRequest:
+      type: object
+      required:
+        - checkIn
+        - checkOut
+        - items
+        - adults
+      properties:
+        checkIn:
+          type: string
+          format: date
+        checkOut:
+          type: string
+          format: date
+        adults:
+          type: integer
+          minimum: 1
+        children:
+          type: integer
+          minimum: 0
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required:
+              - roomTypeId
+              - roomCount
+            properties:
+              roomTypeId:
+                type: string
+                format: uuid
+              roomCount:
+                type: integer
+                minimum: 1
+
+    AvailabilityQuoteItem:
+      type: object
+      properties:
+        roomTypeId:
+          type: string
+          format: uuid
+        roomTypeCode:
+          type: string
+        roomTypeName:
+          type: string
+        capacity:
+          type: integer
+        roomCount:
+          type: integer
+        availableCount:
+          type: integer
+        nightlyRate:
+          type: string
+        nights:
+          type: integer
+        subtotalAmount:
+          type: string
+        vatAmount:
+          type: string
+        totalAmount:
+          type: string
+
+    AvailabilityQuote:
+      type: object
+      properties:
+        checkIn:
+          type: string
+          format: date
+        checkOut:
+          type: string
+          format: date
+        nights:
+          type: integer
+        adults:
+          type: integer
+        children:
+          type: integer
+        available:
+          type: boolean
+        currency:
+          type: string
+        vatRateId:
+          type: string
+          format: uuid
+        vatRate:
+          type: string
+        subtotalAmount:
+          type: string
+        vatAmount:
+          type: string
+        totalAmount:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AvailabilityQuoteItem"
+
+    CreateHoldRequest:
+      type: object
+      required:
+        - checkIn
+        - checkOut
+        - items
+        - adults
+      properties:
+        customerId:
+          type: string
+          format: uuid
+        checkIn:
+          type: string
+          format: date
+        checkOut:
+          type: string
+          format: date
+        adults:
+          type: integer
+          minimum: 1
+        children:
+          type: integer
+          minimum: 0
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required:
+              - roomTypeId
+              - roomCount
+            properties:
+              roomTypeId:
+                type: string
+                format: uuid
+              roomCount:
+                type: integer
+                minimum: 1

@@ -23,6 +23,7 @@ type Config struct {
 	ShutdownTimeout    time.Duration
 	CORSAllowedOrigins []string
 	PublicBaseURL      string
+	FrontendBaseURL    string
 	HotelTimezone      string
 	HotelLocation      *time.Location
 	UploadMaxBytes     int64
@@ -63,6 +64,7 @@ func (c Config) LogValue() slog.Value {
 		slog.String("http_addr", c.HTTPAddr),
 		slog.Duration("shutdown_timeout", c.ShutdownTimeout),
 		slog.String("public_base_url", c.PublicBaseURL),
+		slog.String("frontend_base_url", c.FrontendBaseURL),
 		slog.String("hotel_timezone", c.HotelTimezone),
 		slog.Int64("upload_max_bytes", c.UploadMaxBytes),
 		slog.Int("db_max_conns", int(c.DBMaxConns)),
@@ -168,6 +170,7 @@ func LoadFrom(lookup func(string) (string, bool)) (Config, error) {
 		ShutdownTimeout:       getDuration("SHUTDOWN_TIMEOUT", 15*time.Second),
 		CORSAllowedOrigins:    splitCSV(getString("CORS_ALLOWED_ORIGINS", "http://localhost:5173")),
 		PublicBaseURL:         getString("PUBLIC_BASE_URL", "http://localhost:8080"),
+		FrontendBaseURL:       getString("FRONTEND_BASE_URL", "http://localhost:5173"),
 		HotelTimezone:         getString("HOTEL_TIMEZONE", "Asia/Ho_Chi_Minh"),
 		UploadMaxBytes:        getInt64("UPLOAD_MAX_BYTES", 5*1024*1024),
 		DatabaseURL:           requireString("DATABASE_URL"),

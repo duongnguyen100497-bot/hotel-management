@@ -17,6 +17,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/redis"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"github.com/trandinh0506/hotel-management/backend/internal/platform/db"
+	platformminio "github.com/trandinh0506/hotel-management/backend/internal/platform/minio"
 )
 
 // PostgresTestEnv bundles an isolated Testcontainers PostgreSQL instance with all up migrations applied.
@@ -32,6 +33,17 @@ type RedisTestEnv struct {
 	Container *redis.RedisContainer
 	URL       string
 	Addr      string
+}
+
+// MinIOTestEnv bundles an isolated Testcontainers MinIO instance with a pre-created bucket.
+type MinIOTestEnv struct {
+	Container     testcontainers.Container
+	Endpoint      string
+	AccessKey     string
+	SecretKey     string
+	Bucket        string
+	PublicBaseURL string
+	Client        *platformminio.Client
 }
 
 // StartPostgres launches a postgres:16-alpine container, runs all BackEnd/db/migration/*.up.sql files,
@@ -175,4 +187,79 @@ func ApplyMigrations(ctx context.Context, pool *pgxpool.Pool, dir string) error 
 		}
 	}
 	return nil
+}
+
+// StartMinIO launches a minio/minio:latest container, creates the hotel-media bucket, and registers cleanup on t.
+func StartMinIO(t testing.TB) *MinIOTestEnv {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	const (
+		accessKey = "minioadmin"
+		secretKey = "minioadmin123"
+		bucket    = "hotel-media"
+	)
+
+	req := testcontainers.ContainerRequest{
+		Image:        "minio/minio:latest",
+		ExposedPorts: []string{"9000/tcp"},
+		Env: map[string]string{
+			"MINIO_ROOT_USER":     accessKey,
+			"MINIO_ROOT_PASSWORD": secretKey,
+		},
+		Cmd: []string{"server", "/data"},
+		WaitingFor: wait.ForHTTP("/minio/health/live").
+			WithPort("9000/tcp").
+			WithStartupTimeout(60 * time.Second),
+	}
+
+	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	if err != nil {
+		t.Fatalf("start minio testcontainer: %v", err)
+	}
+
+	endpoint, err := container.PortEndpoint(ctx, "9000/tcp", "")
+	if err != nil {
+		_ = container.Terminate(context.Background())
+		t.Fatalf("minio endpoint: %v", err)
+	}
+
+	publicBase := "http://" + endpoint
+	client, err := platformminio.NewClient(platformminio.Config{
+		Endpoint:      endpoint,
+		AccessKey:     accessKey,
+		SecretKey:     secretKey,
+		Bucket:        bucket,
+		UseSSL:        false,
+		PublicBaseURL: publicBase,
+	})
+	if err != nil {
+		_ = container.Terminate(context.Background())
+		t.Fatalf("init minio client: %v", err)
+	}
+	if err := client.EnsureBucket(ctx); err != nil {
+		_ = container.Terminate(context.Background())
+		t.Fatalf("ensure minio bucket: %v", err)
+	}
+
+	t.Cleanup(func() {
+		termCtx, termCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer termCancel()
+		_ = container.Terminate(termCtx)
+	})
+
+	return &MinIOTestEnv{
+		Container:     container,
+		Endpoint:      endpoint,
+		AccessKey:     accessKey,
+		SecretKey:     secretKey,
+		Bucket:        bucket,
+		PublicBaseURL: publicBase,
+		Client:        client,
+	}
 }

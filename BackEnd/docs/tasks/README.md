@@ -100,22 +100,22 @@ flowchart LR
 
 | Trạng thái | Task | Nghiệp vụ | Phụ thuộc | Migration | Commit gợi ý |
 | :---: | :---: | --- | --- | :---: | --- |
-| [ ] | **T1.1** | Schema Identity & RBAC, seed danh mục quyền chuẩn & CLI bootstrap Root Admin | `T0.4`, `T0.5` | `000003` | `feat(identity): add identity and rbac schema, permission seed and root admin bootstrap cli` |
-| [ ] | **T1.2** | Đăng ký khách hàng, đăng nhập Argon2id, JWT access & refresh cookie xoay vòng | `T1.1`, `T0.3` | — | `feat(identity): implement customer registration, argon2id login and rotating session tokens` |
-| [ ] | **T1.3** | Quên mật khẩu & Adapter gửi email SMTP qua Outbox (Mailpit / Gmail) | `T1.2`, `T0.5` | — | `feat(notification): add smtp outbox delivery and password reset flow` |
-| [ ] | **T1.4** | Dynamic RBAC middleware, Root bypass bất biến & API quản trị Role/Permission/User-Role | `T1.2` | — | `feat(rbac): implement dynamic authorization middleware, root bypass and rbac management apis` |
-| [ ] | **T1.5** | Schema People, CRUD nhân viên & Luồng kích hoạt nhân viên qua Email SMTP | `T1.3`, `T1.4` | `000004` | `feat(people): add employee crud and atomic smtp email activation workflow` |
-| [ ] | **T1.6** | Quản lý hồ sơ khách hàng (Staff CRUD) & Tự quản lý tài khoản `/me` | `T1.5` | — | `feat(people): add customer profile management and self-service me endpoints` |
+| [x] | **T1.1** | Schema Identity & RBAC, seed danh mục quyền chuẩn & CLI bootstrap Root Admin | `T0.4`, `T0.5` | `000003` | `feat(identity): add identity and rbac schema, permission seed and root admin bootstrap cli` |
+| [x] | **T1.2** | Đăng ký khách hàng, đăng nhập Argon2id, JWT access & refresh cookie xoay vòng | `T1.1`, `T0.3` | — | `feat(identity): implement customer registration, argon2id login and rotating session tokens` |
+| [x] | **T1.3** | Quên mật khẩu & Adapter gửi email SMTP qua Outbox (Mailpit / Gmail) | `T1.2`, `T0.5` | — | `feat(notification): add smtp outbox delivery and password reset flow` |
+| [x] | **T1.4** | Dynamic RBAC middleware, Root bypass bất biến & API quản trị Role/Permission/User-Role | `T1.2` | — | `feat(rbac): implement dynamic authorization middleware, root bypass and rbac management apis` |
+| [x] | **T1.5** | Schema People, CRUD nhân viên & Luồng kích hoạt nhân viên qua Email SMTP | `T1.3`, `T1.4` | `000004` | `feat(people): add employee crud and atomic smtp email activation workflow` |
+| [x] | **T1.6** | Quản lý hồ sơ khách hàng (Staff CRUD) & Tự quản lý tài khoản `/me` | `T1.5` | — | `feat(people): add customer profile management and self-service me endpoints` |
 
 ### Phase 2 — Khách sạn, VAT, Phòng, Dịch vụ & MinIO Media ([phase-2-property-vat-media.md](phase-2-property-vat-media.md))
 
 | Trạng thái | Task | Nghiệp vụ | Phụ thuộc | Migration | Commit gợi ý |
 | :---: | :---: | --- | --- | :---: | --- |
-| [ ] | **T2.1** | Cấu hình khách sạn (TTL giữ phòng tùy chỉnh), VAT CRUD & Pricing Quote Helper | `T1.4`, `T0.5` | `000005` | `feat(pricing): add hotel settings with configurable hold ttl, vat rates crud and quote calculator` |
-| [ ] | **T2.2** | Loại phòng, Phòng vật lý, Staff CRUD (optimistic lock) & Catalogue công khai | `T2.1` | `000006` | `feat(property): add room types, physical rooms crud and public catalog search` |
-| [ ] | **T2.3** | Chuyển trạng thái vận hành phòng (`available`/`cleaning`/`maintenance`) & lịch sử | `T2.2` | — | `feat(property): add controlled room operational state and maintenance transitions` |
-| [ ] | **T2.4** | Danh mục dịch vụ khách sạn (CRUD & bảo vệ deactivate) | `T2.1` | `000007` | `feat(property): add service catalog crud and deactivation protection` |
-| [ ] | **T2.5** | Module Media MinIO (presigned PUT, magic-byte check, gắn ảnh phòng & cleanup worker) | `T2.2`, `T0.5` | `000008` | `feat(media): add minio presigned upload, magic-byte validation, room linking and cleanup worker` |
+| [x] | **T2.1** | Cấu hình khách sạn (TTL giữ phòng tùy chỉnh), VAT CRUD & Pricing Quote Helper | `T1.4`, `T0.5` | `000005` | `feat(pricing): add hotel settings with configurable hold ttl, vat rates crud and quote calculator` |
+| [x] | **T2.2** | Loại phòng, Phòng vật lý, Staff CRUD (optimistic lock) & Catalogue công khai | `T2.1` | `000006` | `feat(property): add room types, physical rooms crud and public catalog search` |
+| [x] | **T2.3** | Chuyển trạng thái vận hành phòng (`available`/`cleaning`/`maintenance`) & lịch sử | `T2.2` | — | `feat(property): add controlled room operational state and maintenance transitions` |
+| [x] | **T2.4** | Danh mục dịch vụ khách sạn (CRUD & bảo vệ deactivate) | `T2.1` | `000007` | `feat(property): add service catalog crud and deactivation protection` |
+| [x] | **T2.5** | Module Media MinIO (presigned PUT, magic-byte check, gắn ảnh phòng & cleanup worker) | `T2.2`, `T0.5` | `000008` | `feat(media): add minio presigned upload, magic-byte validation, room linking and cleanup worker` |
 
 ### Phase 3 — Giữ phòng Redis & Đặt phòng Lẻ / Nhóm / Hủy ([phase-3-booking-holds.md](phase-3-booking-holds.md))
 
